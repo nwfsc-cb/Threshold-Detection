@@ -1,0 +1,502 @@
+---
+title: "simulations_v1"
+author: "Raine Detmer"
+date: '2023-07-26'
+output: html_document
+---
+
+First attempt at simulating data with a known driver-response relationship and seeing whether a threshold in this relationship can be detected by GAMs
+
+# Setup
+
+
+```{r, include=FALSE}
+# load packages
+
+# for tipping points
+library("vegan")
+library("mgcv")
+library("akima") # Interpolation of Irregularly and Regularly Spaced Data
+
+# these for reshaping and manipulating data:
+library("tidyverse")
+library("lubridate")
+library("quantmod") # for findPeaks function
+library("data.table") #for between() function
+library("rootSolve") 
+
+library("tictoc") # for timing
+
+```
+
+Load functions for simulating data, fitting GAMs, calculating thresholds, etc. : 
+
+```{r}
+source("load_functions.R") # loads all the functions in the "functions" folder
+
+```
+
+The functions for fitting GAMs, bootstrapping, and calculating thresholds are copied/modified from the "SICCME/S-CCME Tipping Points ECCWO5 Workshop" by K. Holsman, K. Mills, E. Hazen (https://github.com/kholsman/Tipping-Points)
+
+# Example driver-response relationship
+
+Use a driver-response relationship that is similar to the relationship between Ca. sea lion pup production and NOI_summer (Fig. 4a of Samhouri et al. 2017). To get a rough analytical approximation of this type of relationship, make some fake data that resemble the curve in Fig. 4a, and then fit a nonlinear function to these data:
+
+```{r}
+
+fakedt <- data.frame(
+  pups = c(19, 17, 16, 18, 20, 22, 20, 14, 9),
+  nois = c(-2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5)
+)
+
+# use nls() to fit a curve to these data
+mod1 <- nls(pups~ a*(nois-b)^3 + c*(nois-b)^2 +d, data = fakedt, start = list(a = 1, b = 0.1, c = 1, d = 18)) # try cubic polynomial with x^2 term (which means the second deriv should be a line with a nonzero x-intercept)
+
+# save the coefficients 
+a <- summary(mod1)$coefficients[1, 1]
+b <- summary(mod1)$coefficients[2, 1]
+c <- summary(mod1)$coefficients[3, 1]
+d <- summary(mod1)$coefficients[4, 1]
+
+# plot results
+plot(x = fakedt$nois, y = fakedt$pups, xlab = "Driver", ylab = "Response", las=1, ylim = c(5, 25))
+lines(x = seq(from = -2.5, to = 1.5, length.out = 1000), y = a*(seq(from = -2.5, to = 1.5, length.out = 1000)-b)^3 + c*(seq(from = -2.5, to = 1.5, length.out = 1000)-b)^2 + d, type = "l")
+text(x = -1.75, y = 14, expression(y==a(x-b)^3 + c(x-b)^2 + d))#"y = a(x-b)^3 + c(x-b)^2 + d"
+mtext(side = 3, "Driver-response curve based on NOI_s-Sea lion pup production relationship")
+
+```
+
+turn this into a function to use for simulating data:
+
+```{r}
+
+true_yofx <- function(x.f){ # input = value of the driver
+  y <- a*(x.f-b)^3+c*(x.f-b)^2+d
+  
+  return(y) # return value of response
+}
+
+
+```
+
+The first derivative of this function is
+
+$$\frac{dy}{dt} = 3a(x-b)^2 + 2c(x-b)$$
+
+and the second derivative is
+
+$$\frac{d^2y}{dt^2} = 6a(x-b)+2c$$
+
+The true threshold (as defined by the inflection point) is where the second derivative is equal to zero, which occurs when x = b - c/(3a)
+
+```{r}
+thresh_true <- b - c/(3*a)
+
+```
+
+
+# Simulations
+
+## Driver data
+
+use summary statistics from the real data on NOI_summer for simulating values of the driver
+
+```{r}
+# import the NOI data
+noi <- read.csv("https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_OC_NOI.csv?time%2CNOI%2Cindex&index=%22NOI%22")
+
+#View(noi)
+
+noi1 <- noi[-1,] # remove header row
+
+# calculate the values of NOI in the summer (here I took the mean across months 7, 8, and 9, but not sure if this is the correct way to calculate summer NOI)
+nois <- noi1 %>% mutate(year = lubridate::year(time), month =lubridate::month(time)) %>% mutate(NOI = as.numeric(NOI)) %>% mutate(season = if_else(month %in% c(7, 8, 9), "S", if_else(month %in% c(1, 2,3), "W", "NA"))) %>% filter(season=="S") %>% group_by(year) %>% summarize(NOI = mean(NOI, na.rm = T)) 
+
+# get the mean and sd
+nois_mean <- mean(nois$NOI, na.rm = T)
+nois_sd <- sd(nois$NOI, na.rm = T)
+
+# check for autocorrelation
+#acf(nois$NOI)
+
+```
+
+## Parameters
+
+define parameters for the simulations and fitting
+
+```{r}
+
+nsim1 <- 1 #number of simulations to run
+tmax <- 60 # max length of simulated time series
+x_mean <- nois_mean# mean of x variable (driver)
+x_sd <- nois_sd #sd of x variable
+x_acf <- 0 #temporal autocorrelation of x variable
+xy_fun <- true_yofx #function for true relationship between driver and response 
+p_error <- 0.1 #process error (noise in relationship between x and y)
+obs_error <- 0.1#observation error (noise in observation of y values)
+seed <- 123 #seed for random number generation
+y_pos <- TRUE # restrict x values to those that produce positive y values (see sim1fun.R for details; issue is that the true_yofx function used here predicts negative y values for x > around 1.8, which doesn't make sense if y = number of pups produced. I cheated by restricting the x domain but the true_yofx function should probably be changed)
+x_min <- -Inf # no minimum x value
+x_max <- 1.8 # max x value; if simulated values are larger than this they are set to 1.8
+
+knots <- 4 # knots for GAMS; set to 4 in Holsman et al. 2020
+xvals <- seq(from = -3, to= 1.8, by = 0.05) # values of the driver to use for GAM predictions
+boot_n <- 500 # number of bootstraps to run
+boot_nobs <- 45 # number of samples to take each bootstrap run
+
+sdmult <- 1 # 1 sd (involved in calculating threshold significance)
+method <- 2  # method for getting the threshold significance; Holsman et al. 2020 used method 2 
+prob <- c(0.025,0.5,0.975) # probabilities for the quantile ranges 
+span <- 0.1  # smoothing step/span for thresholds; 0.1 is default in Holsman et al. 2020
+
+```
+
+## Test simulation and fitting
+
+Start with low observation error and a long time series to see how well the GAMs can predict the relationship between x and y and the value of the threshold
+
+Test 3 different approaches to calculating the threshold: 1) threshold = point where first deriv is both significantly different from zero and at a max or min value, 2) threshold = point where second deriv is both significantly different from zero and at a max or min value (used in Large et al. 2013 and Samhouri et al. 2017), and 3) threshold = point where second deriv is closest to zero 
+
+```{r}
+# simulate the data (see sim1fun.R for details)
+simtest1 <- simfun1(nsim1, tmax, x_mean, x_sd, x_acf, xy_fun, p_error, obs_error, seed, y_pos, x_max, x_min)
+
+# fit a GAM to the simulated data (see gamfun.R for details)
+gamtest1 <- gamfun(nsim1, simtest1, knots, xvals)
+
+# do the bootstrapping to get the quantiles and first and second derivs (see bootfun.R for details)
+boottest1 <- bootfun(nsim1, simtest1, knots, boot_n, boot_nobs, xvals)
+
+# calculate the values of the threshold using the three approaches described above (see threshfun.R for details)
+threshtest1 <- threshfun(nsim1, gamtest1, boottest1, xvals, sdmult, method, prob, span)
+
+
+```
+
+
+
+```{r}
+# plot the smoothed predictions 
+
+i <- 1 # first simulation
+par(mfrow = c(3, 1), mar = c(1, 5, 1, 2), oma = c(1.5, 0, 0, 0))
+plot(x = threshtest1$hat_qnts[[i]]$driver, y = threshtest1$hat_qnts[[i]]$smoothed_mn, type = "l", xlab = NA, ylab = NA, ylim = c(0, 25), las = 1, xaxt = "n")
+mtext(side = 3, "a) Predicted response", adj = 0)
+mtext(side = 2, "Response", line = 2.5)
+axis(side = 1, at = c(-3, -2, -1, 0, 1), labels = NA)
+# add the confidence intervals
+polygon(x = c(threshtest1$hat_qnts[[i]]$driver, rev(threshtest1$hat_qnts[[i]]$driver)), y = c(threshtest1$hat_qnts[[i]]$smoothed_dwn, rev(threshtest1$hat_qnts[[i]]$smoothed_up)), col = adjustcolor("gray50", alpha.f = 0.3), lty = 2)
+# threshold using max first deriv
+abline(v =threshtest1$thresh_1[[i]], col = "purple")
+# threshold using max second deriv
+abline(v =threshtest1$thresh_2[[i]], col = "forestgreen")
+# threshold using second deriv closest to 0
+abline(v =threshtest1$thresh_20[[i]], col = "orange")
+# add true values
+lines(x = xvals, y =true_yofx(xvals), type = "l", lty = 1, col = "dodgerblue", lwd = 1.5)
+abline(v = thresh_true, col = "dodgerblue", lwd = 1, lty = 1) # true threshold
+#legend(x = "left", legend = c("GAM prediction", "true value"), col = c("black", "dodgerblue"), bty = "n", lwd = 1, ncol = 2)
+legend(x = "bottomleft", legend = c("max s'(x)", "max s''(x)", "s''(x)=0", "true"), title = "Threshold calculation method", col = c("purple", "forestgreen", "orange", "dodgerblue"), lty = 1, bty = "n", ncol = 2)
+
+# plot the smoothed first derivative
+plot(x = threshtest1$df1_qnts[[i]]$driver, y = threshtest1$df1_qnts[[i]]$smoothed_mn, type = "l", xlab = NA, ylab = NA, las = 1, xaxt = "n")
+mtext(side = 3, "b) First derivative", adj = 0)
+mtext(side = 2, "s'(x)", line = 2.5)
+axis(side = 1, at = c(-3, -2, -1, 0, 1), labels = NA)
+# add the confidence intervals
+polygon(x = c(threshtest1$df1_qnts[[i]]$driver, rev(threshtest1$df1_qnts[[i]]$driver)), y = c(threshtest1$df1_qnts[[i]]$smoothed_dwn, rev(threshtest1$df1_qnts[[i]]$smoothed_up)), col = adjustcolor("gray50", alpha.f = 0.3), lty = 2)
+# add location where derivative is significantly different from zero (where sig = TRUE)
+lines(x = threshtest1$df1_qnts[[i]]$driver[which(threshtest1$df1_qnts[[i]]$sig)], y = threshtest1$df1_qnts[[i]]$smoothed_mn[which(threshtest1$df1_qnts[[i]]$sig)], type = "p", pch = 16)
+# threshold using max first deriv
+abline(v =threshtest1$thresh_1[[i]], col = "purple")
+# threshold using max second deriv
+abline(v =threshtest1$thresh_2[[i]], col = "forestgreen")
+# threshold using second deriv closest to 0
+abline(v =threshtest1$thresh_20[[i]], col = "orange")
+# add true values
+lines(x = xvals, y = 3*a*(xvals-b)^2 + 2*c*(xvals-b), type = "l", lty = 1, col = "dodgerblue", lwd = 1.5)
+abline(v = thresh_true, col = "dodgerblue", lwd = 1, lty = 1) # true threshold
+
+# plot the smoothed second derivative
+plot(x = threshtest1$df2_qnts[[i]]$driver, y = threshtest1$df2_qnts[[i]]$smoothed_mn, type = "l", xlab = NA, ylab = NA, las = 1)
+mtext(side = 3, "c) Second derivative", adj = 0)
+mtext(side = 2, "s''(x)", line = 2.5)
+mtext(side = 1, "Driver", line = 0.5, outer = TRUE)
+# add the confidence intervals
+polygon(x = c(threshtest1$df2_qnts[[i]]$driver, rev(threshtest1$df2_qnts[[i]]$driver)), y = c(threshtest1$df2_qnts[[i]]$smoothed_dwn, rev(threshtest1$df2_qnts[[i]]$smoothed_up)), col = adjustcolor("gray50", alpha.f = 0.3), lty = 2)
+# add location where derivative is significantly different from zero (where sig = TRUE)
+lines(x = threshtest1$df2_qnts[[i]]$driver[which(threshtest1$df2_qnts[[i]]$sig)], y = threshtest1$df2_qnts[[i]]$smoothed_mn[which(threshtest1$df2_qnts[[i]]$sig)], type = "p", pch = 16)
+# threshold using max first deriv
+abline(v =threshtest1$thresh_1[[i]], col = "purple")
+# threshold using max second deriv
+abline(v =threshtest1$thresh_2[[i]], col = "forestgreen")
+# threshold using second deriv closest to 0
+abline(v =threshtest1$thresh_20[[i]], col = "orange")
+# add true values
+lines(x = xvals, y = 6*a*(xvals-b) + 2*c, type = "l", lty = 1, col = "dodgerblue", lwd = 1.5)
+abline(v = thresh_true, col = "dodgerblue", lwd = 1, lty = 1) # true threshold
+
+
+
+```
+
+In the above figure, the black lines and gray shading are the smoothed mean and 95% quantiles, respectively, of a) the GAM predictions, b) the first derivative, and c) the second derivative. Black dots indicate where the derivatives are significantly different from zero. The light blue curves are the true values for a) the response, b) the first derivative, and c) the second derivative. 
+
+The vertical lines indicate threshold values, where light blue = true threshold, purple = threshold calculated as location where first deriv is at a max/min and significantly different from zero, green = threshold calculated as location where second deriv is at a max/min and significantly different from zero, and orange = threshold calculated as location where second deriv is closest to zero 
+
+## Effects of timeseries length and observation error
+
+Do a quick test of the effects of time series length and observation error on threshold detectability
+
+```{r}
+# set of time series lengths
+length_set <- c(15, 30, 45, 60) 
+
+# set of observation errors
+obs_set <- c(0.5, 3) 
+
+# number of simulations to run for each combination
+nsim <- 10
+
+```
+
+
+```{r}
+# run the simulations
+# low obs error
+sim_lowOE <- simfun1(nsim, tmax, x_mean, x_sd, x_acf, xy_fun, p_error, obs_set[1], seed, y_pos, x_max, x_min) # obs_error = obs_set[i]
+
+# high obs error
+sim_highOE <- simfun1(nsim, tmax, x_mean, x_sd, x_acf, xy_fun, p_error, obs_set[2], seed, y_pos, x_max, x_min) 
+
+# do the bootrapping and threshold calculations for different time series lengths
+tic() # see how long this takes
+
+# start with low obs error
+# make holding lists to store all the results for each time series length 
+gam_lowOE <- vector(mode = "list", length = length(length_set)) # for outputs from gamfun
+boot_lowOE <- vector(mode = "list", length = length(length_set)) # for outputs from bootfun
+thresh_lowOE <- vector(mode = "list", length = length(length_set)) # for outputs from threshfun
+threshdiff_lowOE <- vector(mode = "list", length = length(length_set)) # for output from threshdiff_fun (which returns a data frame that includes the number of thresholds detected and the difference between the estimated threshold and the true threshold; see threshdiff_fun.R for details)
+
+for(i in 1:length(length_set)){
+  
+tmaxi <- length_set[i] # get the ith time series length
+  
+dtsub <- sim_lowOE[which(sim_lowOE$t<=tmaxi),] # subset the data to this number of observations
+  
+gami <- gamfun(nsim, sim_lowOE, knots, xvals)
+
+booti <- bootfun(nsim, sim_lowOE, knots, boot_n, round(0.75*length_set[i]), xvals) # boot_nobs = round(0.75*ts length)
+
+threshi <- threshfun(nsim, gami, booti, xvals, sdmult, method, prob, span)
+
+threshdiffi <- threshdiff_fun(nsim, thresh_true, threshi, 1)
+
+# store results
+gam_lowOE[[i]] <- gami 
+
+boot_lowOE[[i]] <- booti 
+
+thresh_lowOE[[i]] <- threshi 
+
+threshdiff_lowOE[[i]] <- threshdiffi 
+
+  
+}
+
+
+# repeat for higher obs error
+gam_highOE <- vector(mode = "list", length = length(length_set)) # for outputs from gamfun
+boot_highOE <- vector(mode = "list", length = length(length_set)) # for outputs from bootfun
+thresh_highOE <- vector(mode = "list", length = length(length_set)) # for outputs from threshfun
+threshdiff_highOE <- vector(mode = "list", length = length(length_set)) # for outputs from threshdiff_fun
+
+
+for(i in 1:length(length_set)){
+  
+tmaxi <- length_set[i]
+  
+dtsub <- sim_highOE[which(sim_highOE$t<=tmaxi),]
+  
+gami <- gamfun(nsim, sim_highOE, knots, xvals)
+
+booti <- bootfun(nsim, sim_highOE, knots, boot_n, round(0.75*length_set[i]), xvals) # boot_nobs = round(0.75*ts length)
+
+threshi <- threshfun(nsim, gami, booti, xvals, sdmult, method, prob, span)
+
+threshdiffi <- threshdiff_fun(nsim, thresh_true, threshi, 1)
+
+# store results
+gam_highOE[[i]] <- gami
+
+boot_highOE[[i]] <- booti 
+
+thresh_highOE[[i]] <- threshi 
+
+threshdiff_highOE[[i]] <- threshdiffi 
+
+  
+}
+
+toc()
+
+```
+
+Plot results:
+
+```{r}
+# assign colors for each type of threshold calculation
+
+threshcols <- c("purple", "forestgreen", "orange")
+
+# assign point types for each type of threshold calculation
+threshpch <- c(0, 1, 2)
+
+```
+
+
+First look at the effect of time series length and observation error on whether a threshold was detected
+
+```{r}
+# get the fraction of simulations that detected a threshold for each combination of time series length and obs error
+# low observation error
+nthresh1_totL <- c(sum(threshdiff_lowOE[[1]]$thresh1df$nthresh), sum(threshdiff_lowOE[[2]]$thresh1df$nthresh), sum(threshdiff_lowOE[[3]]$thresh1df$nthresh), sum(threshdiff_lowOE[[4]]$thresh1df$nthresh))/nsim
+
+nthresh2_totL <- c(sum(threshdiff_lowOE[[1]]$thresh2df$nthresh), sum(threshdiff_lowOE[[2]]$thresh2df$nthresh), sum(threshdiff_lowOE[[3]]$thresh2df$nthresh), sum(threshdiff_lowOE[[4]]$thresh2df$nthresh))/nsim
+
+nthresh20_totL <- c(sum(threshdiff_lowOE[[1]]$thresh20df$nthresh), sum(threshdiff_lowOE[[2]]$thresh20df$nthresh), sum(threshdiff_lowOE[[3]]$thresh20df$nthresh), sum(threshdiff_lowOE[[4]]$thresh20df$nthresh))/nsim
+
+# plot the results
+plot(x = length_set, y = nthresh1_totL, type = "o",pch = threshpch[1], ylim = c(0, 1), xaxt = "n", xlab = "time series length", ylab = "fraction simulations that detected threshold", las = 1, col = threshcols[1])
+axis(side = 1, at = length_set, labels = length_set)
+lines(x = length_set, y = nthresh2_totL, type = "o", pch = threshpch[2], col = threshcols[2])
+lines(x = length_set, y = nthresh20_totL, type = "o", pch = threshpch[3], col = threshcols[3])
+legend(x = "bottomright", legend = c("max s'(x)", "max s''(x)", "s''(x)=0"), title = "Threshold \ncalculation method", col = threshcols, pch = threshpch, lty = 1, bty = "n")
+mtext(side = 3, line= 0, "a) Low observation error", adj = 0)
+
+```
+
+
+```{r}
+
+# high observation error
+nthresh1_totH <- c(sum(threshdiff_highOE[[1]]$thresh1df$nthresh), sum(threshdiff_highOE[[2]]$thresh1df$nthresh), sum(threshdiff_highOE[[3]]$thresh1df$nthresh), sum(threshdiff_highOE[[4]]$thresh1df$nthresh))/nsim
+
+nthresh2_totH <- c(sum(threshdiff_highOE[[1]]$thresh2df$nthresh), sum(threshdiff_highOE[[2]]$thresh2df$nthresh), sum(threshdiff_highOE[[3]]$thresh2df$nthresh), sum(threshdiff_highOE[[4]]$thresh2df$nthresh))/nsim
+
+nthresh20_totH <- c(sum(threshdiff_highOE[[1]]$thresh20df$nthresh), sum(threshdiff_highOE[[2]]$thresh20df$nthresh), sum(threshdiff_highOE[[3]]$thresh20df$nthresh), sum(threshdiff_highOE[[4]]$thresh20df$nthresh))/nsim
+
+
+
+plot(x = length_set, y = nthresh1_totH, type = "o",pch = threshpch[1], ylim = c(0, 1), xaxt = "n", xlab = "time series length", ylab = "fraction simulations that detected threshold", las = 1, col = threshcols[1])
+axis(side = 1, at = length_set, labels = length_set)
+lines(x = length_set, y = nthresh2_totH, type = "o", pch = threshpch[2], col = threshcols[2])
+lines(x = length_set, y = nthresh20_totH, type = "o", pch = threshpch[3], col = threshcols[3])
+legend(x = "bottomright", legend = c("max s'(x)", "max s''(x)", "s''(x)=0"), title = "Threshold \ncalculation method", col = threshcols, pch = threshpch, lty = 1, bty = "n")
+mtext(side = 3, line= 0, "b) High observation error", adj = 0)
+
+
+```
+
+
+When the threshold was calculated as location where second deriv is closest to zero (orange lines in the above plots), a threshold was always detected, which makes sense because unlike the other two methods, this method doesn't have any significance criteria. For the other two methods I tried, either the first deriv (purple lines) or second deriv (green lines) needed to be significantly different from zero, which is less likely to occur when the time series is short and/or observation error is high.
+
+
+For the simulations where a threshold was detected, look at the difference between the estimated threshold and the true threshold
+
+```{r}
+# first put everything into a data frame for plotting: need column for thresh type, and also column for level of obs error (for facet_wrap)
+
+# low obs error
+for(i in 1:length(length_set)){
+  
+  if(i == 1){
+    
+    lowOE_df <- rbind(threshdiff_lowOE[[i]]$thresh1df, threshdiff_lowOE[[i]]$thresh2df, threshdiff_lowOE[[i]]$thresh20df) %>% mutate(ts_length = as.character(length_set[i])) %>% mutate(obs_error = "low") 
+    
+  } else{
+    
+    df_i <- rbind(threshdiff_lowOE[[i]]$thresh1df, threshdiff_lowOE[[i]]$thresh2df, threshdiff_lowOE[[i]]$thresh20df) %>% mutate(ts_length = as.character(length_set[i])) %>% mutate(obs_error = "low") 
+    
+    lowOE_df <- rbind(lowOE_df, df_i)
+    
+  }
+  
+}
+
+# high obs error
+
+for(i in 1:length(length_set)){
+  
+  if(i == 1){
+    
+    highOE_df <- rbind(threshdiff_highOE[[i]]$thresh1df, threshdiff_highOE[[i]]$thresh2df, threshdiff_highOE[[i]]$thresh20df) %>% mutate(ts_length = as.character(length_set[i])) %>% mutate(obs_error = "high") 
+    
+  } else{
+    
+    df_i <- rbind(threshdiff_highOE[[i]]$thresh1df, threshdiff_highOE[[i]]$thresh2df, threshdiff_highOE[[i]]$thresh20df) %>% mutate(ts_length = as.character(length_set[i])) %>% mutate(obs_error = "high") 
+    
+    highOE_df <- rbind(highOE_df, df_i)
+    
+  }
+  
+}
+
+
+# combine altogether
+results_df <- rbind(lowOE_df, highOE_df)
+
+#View(results_df)
+
+```
+
+
+Low observation error:
+
+```{r}
+results_df %>% filter(obs_error=="low") %>% 
+ggplot(aes(x = ts_length, y = threshdiff, fill = type, color = type)) + 
+  ylim(min(results_df$threshdiff, na.rm = T), max(results_df$threshdiff, na.rm = T))+
+  xlab("Time series length")+
+  ylab("Difference from true threshold")+
+  ggtitle("a) Low observation error (sd = 0.5)")+
+  geom_boxplot(outlier.shape = NA, width    = 0.5, # width of the boxes
+               position = position_dodge(0.48), alpha = 0.2) + # how far apart the boxes in each subgroup are
+  geom_point(position=position_jitterdodge(0.2), alpha = 0.4)+ # jittered points around each subgroup, smaller value in jitterdodge means less spread
+  scale_fill_manual(name = "Threshold \n calc. method",values=threshcols, labels = c("max s'(x)", "max s''(x)", "s''(x)=0")) + # colors for fill of boxplot
+  scale_color_manual(name = "Threshold \n calc. method", values=threshcols, labels = c("max s'(x)", "max s''(x)", "s''(x)=0")) + # colors for points and outline of boxplot
+  geom_hline(yintercept=0, linetype="dashed", color="black")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())#+
+  
+   
+
+```
+Note that for the threshold that is calculated as the location where first deriv is at a max/min and significantly different from zero (purple), there seems to be two sets of thresholds being detected, one that's close to the true value and one that's much farther way. Based on the plot of the smoothed first derivative, I think this second predicted threshold is where the smoothed first derivative starts to curve up slightly around x = 1.5, creating a minimum where the abs value of the first deriv is greater than at the maximum that occurs near the true threshold (and I currently have the threshold calculation function set up so that it only selects the global max/min as the value of the threshold, so this should probably be changed)
+
+
+High observation error:
+
+```{r}
+results_df %>% filter(obs_error=="high") %>% 
+ggplot(aes(x = ts_length, y = threshdiff, fill = type, color = type)) + 
+  ylim(min(results_df$threshdiff, na.rm = T), max(results_df$threshdiff, na.rm = T))+
+  xlab("Time series length")+
+  ylab("Difference from true threshold")+
+  ggtitle("b) Higher observation error (sd = 3)")+
+  geom_boxplot(outlier.shape = NA, width    = 0.5, # width of the boxes
+               position = position_dodge(0.48), alpha = 0.2) + # how far apart the boxes in each subgroup are
+  geom_point(position=position_jitterdodge(0.2), alpha = 0.4)+ # jittered points around each subgroup, smaller value in jitterdodge means less spread
+  scale_fill_manual(name = "Threshold \n calc. method",values=threshcols, labels = c("max s'(x)", "max s''(x)", "s''(x)=0")) + # colors for fill of boxplot
+  scale_color_manual(name = "Threshold \n calc. method", values=threshcols, labels = c("max s'(x)", "max s''(x)", "s''(x)=0")) + # colors for points and outline of boxplot
+  geom_hline(yintercept=0, linetype="dashed", color="black")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())#+
+  
+   
+
+```
+
+
