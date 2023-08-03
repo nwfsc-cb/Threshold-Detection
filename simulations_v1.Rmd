@@ -170,8 +170,6 @@ boottest1 <- bootfun(nsim1, simtest1, knots, boot_n, boot_nobs, xvals)
 
 # calculate the values of the threshold using the three approaches described above (see threshfun.R for details)
 threshtest1 <- threshfun(nsim1, gamtest1, boottest1, xvals, sdmult, method, prob, span)
-
-
 ```
 
 
@@ -499,4 +497,33 @@ ggplot(aes(x = ts_length, y = threshdiff, fill = type, color = type)) +
 
 ```
 
+## Effect of smoother type
 
+```{r eval=FALSE}
+# simulate the data (see sim1fun.R for details)
+nsim1=100
+simtest1 <- simfun1(nsim1, tmax, x_mean, x_sd, x_acf, xy_fun, p_error, obs_error, seed, y_pos, x_max, x_min)
+
+smoother_types = c("tp","cs","cr", "ps","gp")
+
+for(i in 1:length(smoother_types)) {
+  # fit a GAM to the simulated data (see gamfun.R for details)
+  gamtest1 <- gamfun(nsim1, simtest1, knots, xvals, smooth_type = smoother_types[i])
+
+  # do the bootstrapping to get the quantiles and first and second derivs (see bootfun.R for details)
+  boottest1 <- bootfun(nsim1, simtest1, knots, boot_n, boot_nobs, xvals, smooth_type = smoother_types[i])
+
+  # calculate the values of the threshold using the three approaches described above (see threshfun.R for details)
+  threshtest1 <- threshfun(nsim1, gamtest1, boottest1, xvals, sdmult, method, prob, span)
+
+  z <- threshdiff_fun(nsim1, thresh_true, threshtest1, 1)
+  zbind <- do.call("rbind", z)
+  zbind$smooth <- smoother_types[i]
+  if(i==1) {
+    out_df <- z
+  } else {
+    out_df <- rbind(out_df, z)
+  }
+}
+
+```
