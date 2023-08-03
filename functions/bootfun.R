@@ -16,8 +16,9 @@
 #' boot_n.f: number of bootstrap interations to run
 #' boot_nobs.f: number of samples to take each bootstrap run
 #' xvals.f: vector of driver values (xvals) to use for generating predictions from the gams
+#' smooth_type The type of smooth, can be 'tp', 'ps', 'cs', 'cr', 'gp'
 
-bootfun <- function(nsim.f, simdt.f, knots.f, boot_n.f, boot_nobs.f, xvals.f){
+bootfun <- function(nsim.f, simdt.f, knots.f, boot_n.f, boot_nobs.f, xvals.f, smooth_type="tp"){
 
   # make the holding lists to store results for each simulation in simdt
   Deriv1s <- vector(mode = "list", length =nsim.f) # first derivative
@@ -51,7 +52,7 @@ bootfun <- function(nsim.f, simdt.f, knots.f, boot_n.f, boot_nobs.f, xvals.f){
         boot_nobs.f   <- nobs # set number of bootstrap samples equal to nobs
 
       bootd <- sample_n(dd,boot_nobs.f,replace = TRUE) # sample boot_nobs.f rows (with replacement) from the dd data set and name this subsetted data frame bootd
-      tmpgam <- gam(obs_response~s(driver,k=knots.f,bs="tp"),data = bootd) # fit a gam to the bootd data set
+      tmpgam <- gam(obs_response~s(driver,k=knots.f,bs=smooth_type),data = bootd) # fit a gam to the bootd data set
       tmpd <- deriv2(tmpgam,xvals.f) # use the deriv2 function to approximate the first and second derivatives for the values of the driver in xvals.f
       gmlist[[int]] <- tmpgam # store the gam model for the int data subset in gmlist
       Deriv1[int,]  <- tmpd$fd_d1 # store the values of the first derivative across the values of the driver in xvals.f for the gam fit to the int data subset
