@@ -45,9 +45,9 @@ simfun1 <- function(nsim.f, tmax.f, x_mean.f, x_sd.f, x_acf.f, xy_fun, p_error.f
 
       # get the value of x (driver)
       if(y_pos.f==FALSE){
-        xset[t] <-x_mean.f + x_acf.f*xset[t-1] + rnorm(1, mean = 0, sd = x_sd.f)
+        xset[t] <-x_mean.f + x_acf.f*xset[t-1] + sqrt(1 - x_acf.f*x_acf.f) * rnorm(1, mean = 0, sd = x_sd.f)
       } else{ # if y is restricted to positive values than restrict this to the range between x intercept(s)
-        xset[t] <- min(max(x_min.f, x_mean.f + x_acf.f*xset[t-1] + rnorm(1, mean = 0, sd = x_sd.f)), x_max.f)
+        xset[t] <- min(max(x_min.f, x_mean.f + x_acf.f*xset[t-1] + sqrt(1 - x_acf.f*x_acf.f) * rnorm(1, mean = 0, sd = x_sd.f)), x_max.f)
       }
 
       # get the true value of y (response)
