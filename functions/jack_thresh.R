@@ -49,20 +49,27 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
 
   #thresh_method <- thresh_methods[mm]
 
-  # make the holding vectors to store mean, SEs, and RMSEs of the thresholds, number of jackknife
+  # make the holding matrices to store mean, SEs, and RMSEs of the thresholds, number of jackknife
   # iterations that detected a threshold for each simulation replicate, and average number of
-  # thresholds detected per jackknife iteration
+  # thresholds detected per jackknife iteration for each threshold calculation method
   thresh_mean <- matrix(NA, nrow = nsim, ncol = length(thresh_methods))# mean threshold estimate
   thresh_se <- matrix(NA, nrow = nsim, ncol = length(thresh_methods))# SE of threshold estimates
   thresh_rmse <- matrix(NA, nrow = nsim, ncol = length(thresh_methods))# RMSE of threshold estimates
   thresh_n <- matrix(NA, nrow = nsim, ncol = length(thresh_methods))# number of jackknife iterations that detected at least one threshold (goes into calculating the se)
   thresh_n_mean <- matrix(NA, nrow = nsim, ncol = length(thresh_methods))# average number of thresholds that were detected per jackknife iteration
 
+  # make holding vectors for the means and sd's of the driver values for each simulation
+  x_means <- rep(NA, nsim)
+  x_sds <- rep(NA, nsim)
 
   for(i in 1:nsim){ # for each simulation
 
     # subset the data for the ith simulation
     datIN <- simdt[which(simdt$sim == i), ]
+
+    # store the means and sd's of the driver
+    x_means[i] <- mean(datIN$driver)
+    x_sds[i] <- sd(datIN$driver)
 
     # make data set for the jackknife resampling
     dd <- datIN
@@ -422,12 +429,16 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
 
   df <- data.frame(
     sim = rep(c(1:nsim), length(thresh_methods)),
+    thresh_method = rep(thresh_methods, each = nsim),
     thresh_mean = c(thresh_mean),
     thresh_n = c(thresh_n),
     thresh_se = c(thresh_se),
     thresh_rmse = c(thresh_rmse),
     thresh_n_mean = c(thresh_n_mean),
-    thresh_method = rep(thresh_methods, each = nsim)
+    x_mean = rep(x_means, length(thresh_methods)),
+    x_sd = rep(x_sds, length(thresh_methods)),
+    thresh_diff = c(thresh_mean-thresh_loc),
+    thresh_diffN = c((thresh_mean-thresh_loc)/ rep(x_sds, length(thresh_methods)))
   )
 
   #df <- data.frame(
