@@ -22,12 +22,6 @@
 
 #' note: make sure knots, smooth_type, and span all have the same values as used in jack_thresh
 
-# what to do about potential for multiple thresholds? Maybe sort them?
-# I think its good to report if multiple thresholds were being detected, but not sure how to group them
-# maybe simplest is to have another vector that records the number of thresholds detected each jackknife iteration,
-# and then output the mean number detected per iteration for each simulation replicate
-# which means I need a method for consistently selecting a threshold
-# I would want the one closest to the mode, but would need to round to get a mode
 
 jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp", span = 0.1){
 
