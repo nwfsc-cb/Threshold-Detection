@@ -20,15 +20,22 @@
 #' @param acf ACF of residual error, defaults to 0
 #' @param seed initial seed for random number generation
 #' @param control_pars A named list controlling the threshold related parameters. There are four functions
-#' allowed (`skew` for quadratic / skewed distributions, `hockeystick` for breakpoint models, `sigmoidal`, and `linear`).
-#' All functions have a specified threshold location (`thresh_loc`, defaults to 3) and simulations can
-#' have unique values of this (controlled by `thresh_loc_sd`, defaults to 0). The functions also share
-#' a maximum value (`y_max`, defaults to 3). The hockey stick parameter `hs_a` represents an optional
-#' lower x bound below which the function value becomes constant. The `skew_cv` and `skew_conc` arguments are only used for
-#' the skewed distribution, and represents the CV of the Gamma distribution and whether the curve is concave up or concave down, respectively.
-#' The `sig_k` argument is only used for the sigmoidal function, and represents the steepness of the curve; positive values mean y decreases
-#' w/ increasing x values, while negative values mean y increases with increasing x values.
-#' The `lin_m` and `lin_b` arguments are used only for the linear function and represent the slope and intercept, respectively
+#' allowed (specified by the `fun` paramter above). All functions have a specified threshold location
+#' (`thresh_loc`, defaults to 3) and simulations can have unique values of this (controlled by
+#' `thresh_loc_sd`, defaults to 0). The functions also share a maximum value (`y_max`, defaults to 3). The hockey stick parameter `hs_a` represents an optional
+#' lower x bound below which the function value becomes constant. The `skew_cv` and `skew_conc`
+#' arguments are only used for the skewed distribution, and represents the CV of the Gamma
+#' distribution and whether the curve is concave up or concave down, respectively. The `sig_k`
+#' argument is only used for the sigmoidal function, and represents the steepness of the curve;
+#' positive values mean y decreases w/ increasing x values, while negative values mean y increases
+#' with increasing x values. The `lin_m` and `lin_b` arguments are used only for the linear function
+#' and represent the slope and intercept, respectively
+#' @param cov_pars A named list controlling the covariate parameters; `inc_cov` boolean argument for whether
+#' to include a missing covariate (defaults to FALSE), `beta_mean` (mean of normal distribution for slope
+#' of relationship between covariate and response, defaults to 0) and `beta_sd` (sd of this
+#' distribution, controls amount of variability in beta values between simulations; defaults to 0.1). The absolute
+#' values of the betas drawn from this distribution, and `beta_sign` then controls whether to keep them
+#' positive (`beta_sign` = 1) or make them negative (`beta_sign` = -1)
 sim_data <- function(nsim = 100, tmax = 30,
                    driver_pars = list(x_min = NULL, x_max = NULL, thresh_quant = 0.5, x_df = 10, x_sd = 1, uniform = FALSE),
                    fun = "skew",
@@ -45,21 +52,30 @@ sim_data <- function(nsim = 100, tmax = 30,
                                        skew_conc = "up",
                                        sig_k = 1.5,
                                        lin_m = 1,
-                                       lin_b = 0)){
+                                       lin_b = 0),
+                   cov_pars = list(inc_cov = FALSE,
+                                   beta_mean = 0,
+                                   beta_sd = 0.1,
+                                   beta_sign = 1)){
 
   for(s in 1:nsim){ # for each simulation
 
     # set the seed
     set.seed(seed+s^2)
 
+    # get the true threshold location
+    thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
+
     # simulate driver values
     if(driver_pars$uniform == FALSE) {
       xset <- rt(tmax, df = driver_pars$x_df)
-      x_mean <- control_pars$thresh_loc - qt(driver_pars$thresh_quant, df = driver_pars$x_df)
+      #x_mean <- control_pars$thresh_loc - qt(driver_pars$thresh_quant, df = driver_pars$x_df)
+      x_mean <- thresh_loc_true - qt(driver_pars$thresh_quant, df = driver_pars$x_df)
       xset <- x_mean + xset * driver_pars$x_sd
       #xset <- driver_pars$x_mean + xset * driver_pars$x_sd
     } else {
-      x_mean <- control_pars$thresh_loc - qunif(driver_pars$thresh_quant, df = driver_pars$x_df)
+      #x_mean <- control_pars$thresh_loc - qunif(driver_pars$thresh_quant, df = driver_pars$x_df)
+      x_mean <- thresh_loc_true - qunif(driver_pars$thresh_quant, df = driver_pars$x_df)
       a <- x_mean - (driver_pars$x_sd * sqrt(12)) / 2
       b <- x_mean + (driver_pars$x_sd * sqrt(12)) / 2
       #a <- driver_pars$x_mean - (driver_pars$x_sd * sqrt(12)) / 2
@@ -70,7 +86,7 @@ sim_data <- function(nsim = 100, tmax = 30,
     if(fun == "skew") {
       # generate with a lognormal density
       # parameterized in terms of the mode, exp(u-sigma2) and sd
-      thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
+      #thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
       skew_var = (control_pars$skew_cv * control_pars$thresh_loc) ^ 2
       pars <- solve_gamma(thresh_loc_true, skew_var) # get the parameters of the gamma dist
       max_dens <- dgamma(thresh_loc_true, shape = pars$shape, scale = pars$scale)
@@ -104,7 +120,7 @@ sim_data <- function(nsim = 100, tmax = 30,
           }
         return(y)
       }
-      thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
+      #thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
       yset <- hs(xset, y_max = control_pars$y_max, y_min = control_pars$y_min, thresh_loc = thresh_loc_true, type = control_pars$hs_type, a = control_pars$hs_a)
     }
 
@@ -115,7 +131,7 @@ sim_data <- function(nsim = 100, tmax = 30,
         return(y)
       }
 
-      thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
+      #thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
       yset <- sig(xset, y_max = control_pars$y_max, thresh_loc = thresh_loc_true, k = control_pars$sig_k)
 
     }
@@ -133,19 +149,41 @@ sim_data <- function(nsim = 100, tmax = 30,
       dev[t] <- rnorm(1, mean = acf*dev[t-1], sqrt(1 - acf*acf) * obs_sd)
     }
 
-    # add missing covariate
 
-    # add residual / observation error
-    yobset <- yset + dev
+    if(cov_pars$inc_cov == TRUE){ # if including a missing covariate
+
+      # get the covariate values (assume standard normal distribution)
+      x1set <- rnorm(tmax, 0, 1)
+
+      # get the value of the slope of relationship btw response and covariate
+      beta <- cov_pars$beta_sign*abs(rnorm(1, mean = cov_pars$beta_mean, sd = cov_pars$beta_sd))
+
+      # add effect of covariate and residual/observation error
+      yobset <- yset + beta*x1set + dev
+
+    } else { # otherwise just add the residual/observation error
+
+      x1set <- rep(NA, tmax)
+
+      beta <- NA
+
+      yobset <- yset + dev
+
+    }
+
 
     # make data frame of all the results for this simulation
     df <- data.frame(t = 1:tmax, # time steps
                      driver = xset, # value of driver at each time step
+                     cov = x1set, # value of covariate at each time step
                      response = yset, # true value of response at each time step
                      obs_response = yobset, # observed value of response at each time step,
-                     thresh_loc = thresh_loc_true,
-                     sim = s # which simulation this was
+                     thresh_loc = rep(thresh_loc_true, tmax),
+                     beta = rep(beta, tmax), # slope of relationship btw covariate and response
+                     sim = rep(s, tmax) # which simulation this was
     )
+
+
     if(s==1) { # if this was the first simulation
       all_df <- df # save this df as all_df
     } else { # otherwise
