@@ -1,0 +1,2518 @@
+---
+title: "simulations_v2"
+author: "Raine Detmer"
+date: "2023-09-05"
+output: html_document
+---
+
+Using updated functions for simulating data and calculating thresholds
+
+
+New functions: 
+
+- sim_data (simulates the data with specified driver-response relationships; can also include missing covariate and specify which quantile of the driver the threshold falls in)
+
+- jack_thresh (fits gams, uses gratia to calculate derivatives, and calculates the threshold using specified methods for each jackknifing iteration, and outputs summary metrics on the thresholds across the jackknife iterations)
+
+- boot_thresh (uses the workshop's original bootstrapping approach to calculate thresholds, but can now specify the method used for calculations and also now uses gratia for derivative functions)
+
+- jack_results and boot_results (input a specified simulation iteration and these return the jackknifed or bootstrapped gam and derivative predictions that went into the threshold calculations)
+
+```{r, include=FALSE}
+library("mgcv")
+library("tidyverse")
+library("ggpubr") # for plotting
+library("quantmod") # for findPeaks function
+library("data.table") #for between() function
+
+library("tictoc") # for timing
+
+
+source("load_functions.R") # loads all the functions in the "functions" folder
+
+
+```
+
+
+# Possible driver-response relationships
+
+Examples of the types of driver-response relationships sim_data() can produce:
+
+```{r}
+
+#layout(matrix(c(1, 3, 5, 7, 2, 4, 6, 8), nrow = 4, ncol = 2), widths = c(1, 1), heights = c(1, 1, 1, 1))
+#layout.show(n = 8)
+
+par(mfrow = c(4, 2))
+layout(matrix(c(1, 3, 5, 7, 2, 4, 6, 8), nrow = 4, ncol = 2), widths = c(1, 1), heights = c(1, 1, 1, 1))
+par(mar=c(2, 2, 0, 0), oma = c(2, 2, 0, 0))
+# skew v1 (concave down)
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "down", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "skew", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+
+# skew v2 (concave up)
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "skew", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1, labels = NA)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+mtext(side = 2, "Response", outer = T, adj = 0.5)
+
+# sigmoid v1
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "sigmoidal", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+
+# sigmoid v2
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = -1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "sigmoidal", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1, labels = NA)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+
+# hockey stick v1
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "hockeystick", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+
+# hockey stick v2
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "hockeystick", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1, labels = NA)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+abline(v = control_pars1$thresh_loc)
+
+# step function
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = 3, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "hockeystick", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n")
+axis(side = 2, at = c(0, 1, 2, 3), las = 1)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6))
+abline(v = control_pars1$thresh_loc)
+mtext(side = 1, "Driver", outer = T, adj = 0.5)
+
+# linear
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 0, lin_b = 1.5)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "linear", control_pars = control_pars1)
+plot(x = fun_test1$driver, fun_test1$response, xlab = NA, ylab = NA, las = 1, yaxt = "n", xaxt = "n", ylim = c(0, 3))
+axis(side = 2, at = c(0, 1, 2, 3), las = 1, labels = NA)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6))
+#abline(v = control_pars1$thresh_loc)
+
+```
+
+
+
+# focal driver-response relationships
+
+Could focus on three example relationships with thresholds and one linear relationship?
+
+
+Here, each side of the threshold was arbitrarily labeled as "good" (where the response variable is at desired values) and "bad" (where the response variable is at values that want to be avoided)
+
+```{r, echo = FALSE}
+par(mfrow = c(2, 2))
+layout(matrix(c(1, 3, 2 , 4), nrow = 2, ncol = 2), widths = c(1, 1), heights = c(1, 1))
+#par(mar=c(0.5, 2.75, 1.75, 0.5))
+par(mar=c(1, 2.75, 2.75, 0), oma = c(3, 3, 0, 0))
+# skew v1 (concave down)
+control_pars_sk1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "down", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "skew", control_pars = control_pars_sk1) 
+#fun_test1 <- fun_test1[order(fun_test1$driver),] # for plotting as a line rather than points
+plot(x = fun_test1$driver, fun_test1$response, las = 1, xlab = NA, ylab = NA, type = "p")
+abline(v = control_pars_sk1$thresh_loc)
+mtext(side = 3, "skew") #, adj = 0
+#mtext(side = 1, "driver", line = 2.5)
+mtext(side = 2, "response", line = 2.5)#, outer = TRUE
+text(x = 0.25, y = 2.5, "'bad' side")
+text(x = 4.5, y = 1, "'good' side")
+
+# sigmoid v1
+control_pars_sg1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "sigmoidal", control_pars = control_pars_sg1)
+plot(x = fun_test1$driver, fun_test1$response, las = 1, xlab = NA, ylab = NA)
+abline(v = control_pars_sg1$thresh_loc)
+mtext(side = 3, "sigmoidal")
+#mtext(side = 1, "driver", line = 2)
+#mtext(side = 2, "response", line = 2)
+text(x = 0.25, y = 2.5, "'bad' side")
+text(x = 4.5, y = 1, "'good' side")
+
+# hockey stick v1
+control_pars_hs1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "hockeystick", control_pars = control_pars_hs1)
+plot(x = fun_test1$driver, fun_test1$response, las = 1, xlab = NA, ylab = NA)
+abline(v = control_pars_hs1$thresh_loc)
+mtext(side = 3, "hockeystick")
+mtext(side = 1, "driver", line = 2)
+mtext(side = 2, "response", line = 2.5)
+text(x = 0.25, y = 2.5, "'bad' side")
+text(x = 4.5, y = 1, "'good' side")
+
+# linear
+control_pars_ln1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+fun_test1 <- sim_data(nsim = 1, tmax = 200, fun = "linear", control_pars = control_pars_ln1)
+plot(x = fun_test1$driver, fun_test1$response, las = 1, xlab = NA, ylab = NA)
+#abline(v = control_pars_ln1$thresh_loc)
+mtext(side = 3, "linear")
+mtext(side = 1, "driver", line = 2)
+#mtext(side = 2, "response", line = 2)
+#text(x = 0.25, y = 2.5, "'bad' side")
+#text(x = 4.5, y = 1, "'good' side")
+
+```
+
+
+## aside: effect of smoothing on findPeaks function
+
+The original threshold workshop code defined the threshold as the location where the second derivative was furthest from zero, which they calculated by using the findPeaks function in the quantmod package to find maxima and minima in the bootstrapped second derivative and then selected the peak that was furthest from zero (and significantly different from zero). But individual jackknife iterations are noisier than the smoothed quantiles of the bootstrapped derivative used in the workshop code, and the findPeaks function doesn't seem to handle noisy data well
+
+
+The following plots show the jackknifed gam predictions and first and second derivatives of an example simulation with a sigmoidal driver-response relationship, low observation error (obs error = 0.1), a long time series length (ts length = 45), and no missing covariate. Each individual curve is the result of a single jackknife iteration (i.e., leaving out one data point when fitting the gam). Blue points are the local maxima and minima detected on that curve by the findPeaks function. Results for different levels of smoothing are shown.
+
+
+For the sigmoidal relationship, the true second derivative has one local maxima and one local minima, but because the estimated second derivative is noisy, the findPeaks function returns a large number of maxima and minima. 
+
+
+In this case it isn't really a problem because all of these extra peaks are closer to zero than the true maxima and minima (and the threshold calculation method returns the peaks that are furthest from zero), but it might be an issue in other cases, e.g., if the ends of the curve where most of the noise is are further from zero than the true max/mins. Maybe we should think about adding more criteria to what counts as a local max/min in the findPeaks function? 
+
+### smoothing = 0.025
+
+
+```{r, echo = FALSE}
+# simulate the data
+control_pars1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "down", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+simdt1 <- sim_data(nsim = 1, tmax = 45, fun = "sigmoidal", obs_sd = 0.1, control_pars = control_pars1)
+
+# get the jackknifing results
+xvals1 <- seq(from = 0, to = 6, by = 0.01)
+results <- jack_results(simdt1, xvals1, sim_choice = c(1), span = 0.025) # c(1) means look at results for first simulation
+ind_dfs <- results$ind_dfs # results for each individual jackknife iteration
+
+simx <- 1
+par(mfrow = c(3, 1), mar = c(1, 5, 1, 2), oma = c(1.5, 0, 0, 0))
+plot(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "a) Predicted response", adj = 0)
+mtext(side = 2, "s(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+}
+
+# first deriv 
+plot(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "b) First derivative", adj = 0)
+mtext(side = 2, "s'(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+#lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = "blue", type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+  #lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = "blue", type = "p")
+}
+
+# second deriv 
+plot(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, xlab = NA, ylab = NA, col = adjustcolor("black", alpha.f = 0.25))
+mtext(side = 3, "c) Second derivative", adj = 0)
+mtext(side = 2, "s''(x)", line = 2.5)
+mtext(side = 1, "Driver", line = 0.5, outer = TRUE)
+lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+  lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+}
+
+
+```
+
+
+
+### smoothing = 0.1 (default in threshold workshop code)
+
+```{r, echo = FALSE}
+# get the jackknifing results
+results <- jack_results(simdt1, xvals1, sim_choice = c(1), span = 0.1) # c(1) means look at results for first simulation
+ind_dfs <- results$ind_dfs # results for each individual jackknife iteration
+
+par(mfrow = c(3, 1), mar = c(1, 5, 1, 2), oma = c(1.5, 0, 0, 0))
+plot(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "a) Predicted response", adj = 0)
+mtext(side = 2, "s(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+}
+
+# first deriv 
+plot(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "b) First derivative", adj = 0)
+mtext(side = 2, "s'(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+#lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = "blue", type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+ # lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = "blue", type = "p")
+}
+
+# second deriv 
+plot(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, xlab = NA, ylab = NA, col = adjustcolor("black", alpha.f = 0.25))
+mtext(side = 3, "c) Second derivative", adj = 0)
+mtext(side = 2, "s''(x)", line = 2.5)
+mtext(side = 1, "Driver", line = 0.5, outer = TRUE)
+lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+  lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+}
+
+```
+
+### smoothing = 0.2
+```{r, echo = FALSE}
+# get the jackknifing results
+results <- jack_results(simdt1, xvals1, sim_choice = c(1), span = 0.2) # c(1) means look at results for first simulation
+ind_dfs <- results$ind_dfs # results for each individual jackknife iteration
+
+par(mfrow = c(3, 1), mar = c(1, 5, 1, 2), oma = c(1.5, 0, 0, 0))
+plot(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "a) Predicted response", adj = 0)
+mtext(side = 2, "s(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$response[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+}
+
+# first deriv 
+plot(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, col = adjustcolor("black", alpha.f = 0.25), xlab = NA, ylab = NA, xaxt = "n")
+mtext(side = 3, "b) First derivative", adj = 0)
+mtext(side = 2, "s'(x)", line = 2.5)
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6), labels = NA)
+#lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = "blue", type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+  #lines(x = xvals1[c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]), findPeaks(-ind_dfs$d1[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = "blue", type = "p")
+}
+
+# second deriv 
+plot(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)], type = "l", las = 1, xlab = NA, ylab = NA, col = adjustcolor("black", alpha.f = 0.25))
+mtext(side = 3, "c) Second derivative", adj = 0)
+mtext(side = 2, "s''(x)", line = 2.5)
+mtext(side = 1, "Driver", line = 0.5, outer = TRUE)
+lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==1)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+for(i in 2:length(unique(ind_dfs$jack_int))){
+  lines(x = xvals1, y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)], type = "l", col = adjustcolor("black", alpha.f = 0.25))
+  lines(x = xvals1[c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], y = ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)][c(findPeaks(ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]),findPeaks( -ind_dfs$d2[which(ind_dfs$sim==simx & ind_dfs$jack_int==i)]))], pch = 16, col = adjustcolor("cyan", alpha.f = 0.75), type = "p")
+}
+
+```
+
+
+# run simulations
+
+
+Look at low/high observation error, short/long time series, threshold quantile near and far from center of driver data, and with small/large effect of covariate
+
+
+Compare jackknifing to original bootstrap approach, and for the jackknifing also look at multiple driver-response relationships
+
+
+Meta-parameters:
+```{r}
+# 2 ts lengths, 2 obs errors, 2 thresh quantiles,2 beta_sd's = 16 combinations, x3 driver response relationships (not including linear)
+
+# number of simulations to run
+nsim1 <- 50 # should to 100 but doing less for now so it takes less time
+nsimb <- 10 # fewer simulations for bootstrapping
+
+xvals1 <- seq(from = 0, to = 6, by = 0.01)
+
+# parameter combinations
+obs_set <- c(0.1, 5)
+#obs_set <- c(0.5, 5)
+ts_set <- c(15, 45)
+quant_set <- c(0.15, 0.5)
+#quant_set <- c(0.25, 0.5)
+beta_sd_set <- c(0.01, 3)
+#beta_sd_set <- c(0.01, 2)
+#cov_set <- c(FALSE, TRUE)
+
+parmat <- unname(as.matrix(expand.grid(obs_set, ts_set, quant_set, beta_sd_set)))
+
+#parmat
+
+# control pars for each driver-response relationship
+# sigmoid v1
+control_pars_sg1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# skew v1 (concave down)
+control_pars_sk1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "down", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# hockey stick v1
+control_pars_hs1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# linear
+control_pars_ln1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+
+```
+
+
+Run the simulations:
+```{r}
+
+# sigmoidal relationship
+
+# jackknifing
+tic()
+for(p in 1:nrow(parmat)){ #1:nrow(parmat)
+  # simulate the data
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 0, beta_sd = parmat[p, 4], beta_sign = 1)
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1, sig_criteria = T, span = 0.1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$beta_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # add column specifying this was jackknifing
+  #thresh_pj$samp <- rep("jack", length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+}
+
+toc()
+
+# save results for this driver-response relationship
+sig_jdf <- jdf
+sig_jdf$shape <- rep("sigmoidal", length(sig_jdf$sim))
+
+# bootstrapping
+tic()
+for(p in 1:nrow(parmat)){
+  # simulate the data
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 0, beta_sd = parmat[p, 4], beta_sign = 1)
+  dt_p <- sim_data(nsim = nsimb, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # do the bootstrapping
+  thresh_bj <- boot_thresh(dt_p, xvals1, boot_nobs = 0.75*parmat[p, 2], span = 0.1)
+  
+  # add the parameter columns
+  thresh_bj$obs_error <- rep(parmat[p, 1], length(thresh_bj$sim))
+  thresh_bj$ts_length <- rep(parmat[p, 2], length(thresh_bj$sim))
+  thresh_bj$thresh_quant <- rep(parmat[p, 3], length(thresh_bj$sim))
+  thresh_bj$beta_sd <- rep(parmat[p, 4], length(thresh_bj$sim))
+  
+  # add column specifying this was bootstrapping
+  #thresh_bj$samp <- rep("boot", length(thresh_bj$sim))
+  
+  
+  # save the data frame
+  if(p == 1){
+    bdf <- thresh_bj
+  } else {
+    bdf <- rbind(thresh_bj, bdf)
+  }
+  
+}
+
+
+toc()
+
+#View(jdf)
+#View(bdf)
+
+sig_bdf <- bdf
+sig_bdf$shape <- rep("sigmoidal", length(sig_bdf$sim))
+
+
+# jackknifing for skewed relationship
+tic()
+for(p in 1:nrow(parmat)){ #1:nrow(parmat)
+  # simulate the data
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 0, beta_sd = parmat[p, 4], beta_sign = 1)
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1, sig_criteria = T, span = 0.1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$beta_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # add column specifying this was jackknifing
+  #thresh_pj$samp <- rep("jack", length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+toc()
+
+skew_jdf <- jdf
+skew_jdf$shape <- rep("skew", length(skew_jdf$sim))
+
+# jackknifing for hockeystick relationship
+
+tic()
+for(p in 1:nrow(parmat)){ #1:nrow(parmat)
+  # simulate the data
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 0, beta_sd = parmat[p, 4], beta_sign = 1)
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1, sig_criteria = T, span = 0.1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$beta_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # add column specifying this was jackknifing
+  #thresh_pj$samp <- rep("jack", length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+toc()
+
+hs_jdf <- jdf
+hs_jdf$shape <- rep("hockeystick", length(hs_jdf$sim))
+
+```
+
+
+```{r, include=FALSE}
+# save dfs
+
+write.csv(hs_jdf, "hs_results.csv")
+write.csv(skew_jdf, "skew_results.csv")
+write.csv(sig_jdf, "sig_results.csv")
+
+write.csv(sig_bdf, "sigb_results.csv")
+
+```
+
+
+# compare jackknife and bootstrap (sigmoidal only, nsim = 10)
+
+```{r, include=FALSE}
+# process results
+# diff in number detected and diff in difference from true value? or diff in abs diff from true val... want something where pos = jack closer and neg = boot closer
+j_tmp <- sig_jdf %>% filter(sim %in% c(1:nsimb)) %>% select(sim, thresh_method, thresh_n_mean, thresh_diff, obs_error, ts_length, thresh_quant, beta_sd) %>% rename(thresh_n_j = thresh_n_mean, thresh_diff_j = thresh_diff)
+
+b_tmp <- sig_bdf %>% select(sim, thresh_method, thresh_n, thresh_diff, obs_error, ts_length, thresh_quant, beta_sd) %>% rename(thresh_n_b = thresh_n, thresh_diff_b = thresh_diff)
+
+compare_df <- left_join(j_tmp, b_tmp, by = c("sim", "thresh_method", "obs_error", "ts_length", "thresh_quant", "beta_sd")) %>% mutate(abs_diff = abs(thresh_diff_j)- abs(thresh_diff_b), n_diff = thresh_n_j - thresh_n_b) # positve abs_diff means mean threshold from jackknifing is further from true value than bootstrapped threshold, negative means jack was closer. positive n_diff means avg number of thresholds detected across the jackknifing was greater than the number of thresholds detected in the bootstrapping
+
+#View(compare_df)
+
+```
+
+
+## number of thresholds detected
+Plot the difference in the number of thresholds detected each simulation (for bootstrap, this is either 0 or 1, while for jackknife this is the average of the number of thresholds detected each jackknife iteration)
+
+
+Positive values mean that on average jackknifing detected more thresholds than bootstrapping while negative values mean bootstrapping detected more thresholds than jackknifing
+
+
+In this plot (and all boxplots below), each panel is a different combination of 1) observation error, 2) time series length, and 3) standard deviation in the effect of the covariate on the response (beta_sd, where beta ~ abs(N(0, beta_sd)) is the slope of the relationship between the covariate and the response). Columns 1 and 3: obs error = 0.1. Columns 2 and 4: obs error = 5. Columns 1-2: time series length = 15. Columns 3-4: time series length = 45. Top row: beta_sd = 0.01. Bottom row: beta_sd = 3.
+
+
+Within each panel, the results are grouped based on thresh_quant, which is the quantile of the driver data that the threshold falls in (i.e., quant = 0.15 means the true threshold is equal to the 15% quantile of the driver values, and quant = 0.5 means the true threshold is eaual to the median of the driver values), and the subgroupings represent the the method used to calculate the threshold. Purple = local max/min in the second derivative that has the largest absolute value, green = local min in second deriv that is furthest from zero, orange = location where the first derivative crosses zero (a max/min in the response), light blue = location where the second derivative crosses zero (an inflection point)
+
+```{r, echo = FALSE}
+#layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+#layout.show(n=9)
+
+threshcols <- c("purple", "forestgreen", "orange", "dodgerblue")
+threshcols2 <- adjustcolor(threshcols, alpha.f = 0.3)
+
+levels <- matrix(NA, nrow = 8, ncol = 2) # levels for jittering points
+levels[, 1] <- rep(c("abs_max_d2", "min_d2", "zero_d1", "zero_d2"), 2)
+levels[,2] <- rep(c(0.15, 0.5), each = 4)
+
+boxpos <- c(1:4, 7:10) # positions of the boxes
+
+
+plot_dt <- compare_df # data to plot
+
+ymin <- min(plot_dt$n_diff, na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(plot_dt$n_diff, na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.5)
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "difference in no. thresholds detected", line = 2.5, adj = 1.5)
+abline(h = 0, lty = 2)
+text(x = 2, y = 0.8, "jk > bt")
+text(x = 2, y = -0.8, "bt > jk")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(n_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$n_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+```
+
+
+
+## magnitude of difference from true threshold
+
+Plot the difference in the absolute value of the difference between the threshold estimate and the true threshold value, i.e., abs(jack_est - true) - abs(boot_est - true)
+
+
+Positive values mean the bootstrapped estimate was closer to the true value, i.e., abs(jack_est - true) > abs(boot_est - true), while negative values mean the jackknifed estimate was closer.
+
+
+```{r, echo = FALSE}
+
+plot_dt <- compare_df # data to plot
+
+ymin <- min(plot_dt$abs_diff, na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(plot_dt$abs_diff, na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(abs_diff, na.rm = T)) %>% ungroup()
+plot_dt$abs_diff <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$abs_diff)
+
+#plot_dt$abs_diff <- ifelse(is.na(plot_dt$abs_diff)==T, -9999, plot_dt$abs_diff)
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "difference in difference from true thresh", line = 2.5, adj = 1.2)
+abline(h = 0, lty = 2)
+text(x = 2, y = 0.8, "bt closer")
+text(x = 2, y = -0.8, "jk closer")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(abs_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$abs_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+# jackknifing results (nsim = 50, sigmoidal, skew, and hockeystick relationships)
+
+## average number of thresholds detected
+
+Plot the average number of thresholds detected across the jackknife iterations each simulation
+
+### sigmoidal relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- sig_jdf # data to plot
+
+ymin <- min(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.2)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_n_mean, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_n_mean <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_n_mean)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "mean no. thresholds detected", line = 2.5, adj = 2) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 1, lty = 2)
+#text(x = 2, y = 0.8, "bt closer")
+#text(x = 2, y = -0.8, "jk closer")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+
+### skew relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- skew_jdf # data to plot
+
+ymin <- min(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.2)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_n_mean, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_n_mean <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_n_mean)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "mean no. thresholds detected", line = 2.5, adj = 2) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 1, lty = 2)
+#text(x = 2, y = 0.8, "bt closer")
+#text(x = 2, y = -0.8, "jk closer")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+```
+
+
+### hockeystick relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- hs_jdf # data to plot
+
+ymin <- min(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_n_mean, skew_jdf$thresh_n_mean, hs_jdf$thresh_n_mean), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.2)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_n_mean, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_n_mean <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_n_mean)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "mean no. thresholds detected", line = 2.5, adj = 2) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 1, lty = 2)
+#text(x = 2, y = 0.8, "bt closer")
+#text(x = 2, y = -0.8, "jk closer")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_n_mean ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 1, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_n_mean[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+```
+
+
+## difference between mean estimate and true threshold
+
+Plot the difference between the mean threshold estimate (i.e., average of the estimates across jackknife iterations in a simulation) and the true value of the threshold 
+
+### sigmoidal relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- sig_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_diff, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_diff <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_diff)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "thresh_est - thresh_true", line = 2.5, adj = 20) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+text(x = 2, y = 0.5, "'good' side")
+text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+### skew relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- skew_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_diff, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_diff <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_diff)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "thresh_est - thresh_true", line = 2.5, adj = 20) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+text(x = 2, y = 0.5, "'good' side")
+text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+### hockeystick relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- hs_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_diff, skew_jdf$thresh_diff, hs_jdf$thresh_diff), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_diff, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_diff <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_diff)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "thresh_est - thresh_true", line = 2.5, adj = 20) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+text(x = 2, y = 0.5, "'good' side")
+text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_diff ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_diff[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+## RMSE of estimate
+
+Plot the RMSE of the threshold estimates from the jackknifing each simulation
+
+### sigmoidal relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- sig_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.5)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_rmse, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_rmse <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_rmse)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "RMSE of thresh_est", line = 2.5, adj = -3) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+#text(x = 2, y = 0.5, "'good' side")
+#text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+### skew relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- skew_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.5)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_rmse, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_rmse <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_rmse)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "RMSE of thresh_est", line = 2.5, adj = -3) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+#text(x = 2, y = 0.5, "'good' side")
+#text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+### hockeystick relationship
+
+```{r, echo = FALSE}
+
+plot_dt <- hs_jdf # data to plot
+
+#View(sig_jdf)
+
+ymin <- min(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+ymax <- max(c(sig_jdf$thresh_rmse, skew_jdf$thresh_rmse, hs_jdf$thresh_rmse), na.rm = T) # CHANGE RESPONSE VAR
+
+ylabs <- seq(from = ymin, to = ymax, by = 0.5)
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(thresh_method, obs_error, ts_length, beta_sd, thresh_quant) %>% mutate(na_check = mean(thresh_rmse, na.rm = T)) %>% ungroup() # CHANGE RESPONSE VAR
+plot_dt$thresh_rmse <- ifelse(is.na(plot_dt$na_check)==T, -9999, plot_dt$thresh_rmse)# CHANGE RESPONSE VAR
+
+par(mfrow = c(3, 4))
+layout(matrix(c(1, 5,9, 2, 6, 9, 3, 7, 9, 4, 8, 9), nrow = 3, ncol = 4), widths = c(1, 1, 1, 1), heights = c(1, 1, 0.3))
+par(mar=c(0, 1.8, 0.5, 0), oma = c(0, 2, 3, 3))
+# plot 1: low obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 15", line = 1.2, outer = T, adj = 0.25)
+mtext(side = 2, "RMSE of thresh_est", line = 2.5, adj = -3) # CHANGE FOR EACH RESPONSE VARIABLE
+abline(h = 0, lty = 2)
+#text(x = 2, y = 0.5, "'good' side")
+#text(x = 2, y = -0.5, "'bad' side")
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 2: high obs error, short ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n",  yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 3: low obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 3, "obs error = 0.1", line = 0)
+mtext(side = 3, "ts length = 45", line = 1.2, outer = T, adj = 0.8)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 4: high obs error, long ts, low cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[1])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+mtext(side = 4, "beta sd = 0.01", outer = T, adj = 0.9)
+#text(x = 10, y = 0.5, "beta sd = 0.01", xpd = T)
+mtext(side = 3, "obs error = 5", line = 0)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 5: low obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+#View(datasub)
+#if(length(datasub$sim)>0){
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+#} else {
+ # plot(0,type='n',axes=FALSE, ann = FALSE)
+  #axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+#}
+
+# plot 6: high obs error, short ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[1], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 7: low obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[1], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+
+# plot 8: high obs error, long ts, high cov sd
+datasub <- plot_dt %>% filter(obs_error==obs_set[2], ts_length==ts_set[2], beta_sd == beta_sd_set[2])
+boxplot(thresh_rmse ~ thresh_method + as.character(thresh_quant), data = datasub,
+        at = boxpos, col = adjustcolor(threshcols, alpha.f = 0.3), border = threshcols, outline = F, names = NA, xaxt = "n", yaxt = "n", las = 1, xlab = NA, ylab = NA, ylim = c(ymin, ymax))
+axis(side = 2, at = ylabs, labels = NA)
+#mtext(side = 1, "threshold quantile", line = 2.5)
+axis(side = 1, at = c(2.5, 8.5), labels = c("quant = 0.15", "quant = 0.5"), tick = F, line = -1)
+mtext(side = 4, "beta sd = 3", outer = T, adj = 0.3)
+abline(h = 0, lty = 2)
+# add jittered points
+for(i in 1:nrow(levels)){
+  prop <- length(datasub$sim[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])])/nrow(datasub)
+  yvals <- datasub$thresh_rmse[which(datasub$thresh_method==levels[i,1] & datasub$thresh_quant==levels[i, 2])] # CHANGE RESPONSE VARIABLE HERE
+  jtx <- jitter(rep(boxpos[i], length(yvals)) ,amount=prop/2)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=20, col=ifelse(levels[i, 1]=="abs_max_d2", threshcols2[1], ifelse(levels[i, 1]=="min_d2", threshcols2[2], ifelse(levels[i, 1]=="zero_d1", threshcols2[3], threshcols2[4])))) 
+   
+}
+
+# plot 9: dummy plot for legend
+plot(0,type='n',axes=FALSE, ann = FALSE)
+legend(0.8, 0.2, col = threshcols, pch = 16, legend = c("max(abs(s''(x)))", "min(s''(x))", "s'(x)=0", "s''(x)=0"), bty = "n", ncol =4, cex = 1.1, xpd = TRUE, inset = c(0,-0.5)) #, title = "Threshold calculation method"
+text(0.75, -0.4, "Threshold \ncalc. method", xpd = TRUE)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+repeat w/o significance criteria in threshold calculations?
+
+
