@@ -25,12 +25,7 @@
 #' @param span smoothing step/span for thresholds, values closer to 1 = more smoothing
 #' (Holsman et al. 2020 used 0.1 as default)
 
-# what to do about potential for multiple thresholds? Maybe sort them?
-# I think its good to report if multiple thresholds were being detected, but not sure how to group them
-# maybe simplest is to have another vector that records the number of thresholds detected each jackknife iteration,
-# and then output the mean number detected per iteration for each simulation replicate
-# which means I need a method for consistently selecting a threshold
-# I would want the one closest to the mode, but would need to round to get a mode
+# ADD test for nonlinearity
 
 jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2", "zero_d2", "zero_d1"), sig_criteria, thresh_choice = "mean", knots = 4, smooth_type = "tp", span = 0.1){
 
@@ -103,7 +98,7 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
       # remove this observation from the dataset
       jackd <- dd[-int, ]
 
-      gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the bootd data set
+      gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
 
       D1iunsm <- gratia::derivatives(gami, data = xdt, order = 1)$derivative # use the derivatives function from gratia to approximate 1st derivative for the values of the driver in xvals
       D2iunsm <- gratia::derivatives(gami, data = xdt, order = 2)$derivative # use the derivatives function from gratia to approximate 2nd derivative for the values of the driver in xvals
@@ -437,7 +432,7 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
     thresh_n_mean = c(thresh_n_mean),
     #x_mean = rep(x_means, length(thresh_methods)),
     #x_sd = rep(x_sds, length(thresh_methods)),
-    thresh_diff = c(thresh_mean-thresh_loc)#,
+    thresh_diff = c(c(thresh_mean)-thresh_loc)#,
     #thresh_diffN = c((thresh_mean-thresh_loc)/ rep(x_sds, length(thresh_methods)))
   )
 
