@@ -3,8 +3,6 @@
 #' it could be either Beverton-Holt or decrease then flat; also modified the gamma function so the curve
 #' can be concave up or concave down
 
-#' should also add option for missing covariate
-
 #' @param nsim number of simulations
 #' @param tmax length of simulated time series
 #' @param driver_pars A named list controlling the driver (predictor) values simulated, including
@@ -16,6 +14,7 @@
 #' @param acf = temporal autocorrelation of x variable
 #' @param fun function for driver-response relationship. Can be `skew` (values are simulated from a Gamma density, described by the
 #' mode and variance), `hockeystick` , `sigmoidal`, or `linear`. Parameters for each can be modified
+#obs_cv = coefficient of variation of the y values (noise in observation of y values), defaults to 0.01
 #' @param obs_sd = observation error sd (noise in observation of y values), defaults to 0.1
 #' @param acf ACF of residual error, defaults to 0
 #' @param seed initial seed for random number generation
@@ -39,7 +38,7 @@
 sim_data <- function(nsim = 100, tmax = 30,
                    driver_pars = list(x_min = NULL, x_max = NULL, thresh_quant = 0.5, x_df = 10, x_sd = 1, uniform = FALSE),
                    fun = "skew",
-                   obs_sd = 0.1,
+                   obs_sd = 0.1, #obs_cv = 0.01
                    acf = 0,
                    seed = 1234,
                    control_pars = list(thresh_loc = 3,
@@ -126,13 +125,18 @@ sim_data <- function(nsim = 100, tmax = 30,
 
     if(fun == "sigmoidal"){
 
-      sig <- function(x, y_max, thresh_loc, k){
-        y <- y_max/(1 + exp(-k*(x-thresh_loc)))
+      # calculate the inflection point based on the specified threshold location (where the threshold
+      # is defined as the location where the 2nd deriv is minimized)
+
+      #thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
+      infl_point <- sig_infl_pt(control_pars$y_max, control_pars$sig_k, thresh_loc_true)
+
+      sig <- function(x, y_max, infl_pt, k){
+        y <- y_max/(1 + exp(-k*(x-infl_pt)))
         return(y)
       }
 
-      #thresh_loc_true <- rnorm(1, control_pars$thresh_loc, control_pars$thresh_loc_sd)
-      yset <- sig(xset, y_max = control_pars$y_max, thresh_loc = thresh_loc_true, k = control_pars$sig_k)
+      yset <- sig(xset, y_max = control_pars$y_max, infl_pt = infl_point, k = control_pars$sig_k)
 
     }
 
@@ -144,10 +148,17 @@ sim_data <- function(nsim = 100, tmax = 30,
     }
 
     # add normal observation error here -- acf controls mean reversion
+    # using sd
     dev <- rnorm(1, mean = 0, sd = obs_sd)
     for(t in 2:tmax) {
       dev[t] <- rnorm(1, mean = acf*dev[t-1], sqrt(1 - acf*acf) * obs_sd)
     }
+
+    # using cv
+    #dev <- rnorm(1, mean = 0, sd = obs_cv*mean(yset))
+    #for(t in 2:tmax) {
+    # dev[t] <- rnorm(1, mean = acf*dev[t-1], sqrt(1 - acf*acf) * obs_cv*mean(yset))
+     #}
 
 
     if(cov_pars$inc_cov == TRUE){ # if including a missing covariate
@@ -161,13 +172,17 @@ sim_data <- function(nsim = 100, tmax = 30,
       # add effect of covariate and residual/observation error
       yobset <- yset + beta*x1set + dev
 
+
     } else { # otherwise just add the residual/observation error
 
       x1set <- rep(NA, tmax)
 
       beta <- NA
 
+      # add residual/observation error
       yobset <- yset + dev
+
+
 
     }
 
@@ -213,4 +228,40 @@ solve_gamma <- function(mode, variance) {
   theta_sol = mode / (k_sol - 1)
   return(list(shape = k_sol, scale = theta_sol))
 }
+
+# This function returns the location of the inflection point of the sigmoidal function in terms of the
+# location of the minimum of the 2nd deriv (the threshold location, thresh_loc)
+
+#' @param y_max maximum value of the response
+#' @param k steepness of logistic curve
+#' @param thresh_loc location of the threshold, defined as the point where the 2nd deriv has a local min
+
+sig_infl_pt <- function(y_max, k, thresh_loc){
+ # 2nd deriv has max/min where 3rd deriv = 0, which occurs in 2 places
+ # x = (k*ip - log(2 +- sqrt(3)))/k -> solve each of these for the inflection point (ip), then determine which one corresponds to the min
+  ip1 <- (k*thresh_loc + log(2 + sqrt(3)))/k
+  ip2 <- (k*thresh_loc + log(2 - sqrt(3)))/k
+
+  # see which of these produces a minima in the second deriv at x = thresh_loc
+  # minima means 4th deriv at thresh_loc is positive
+  d41 <- (24*exp(-4*k*(-ip1 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip1 + thresh_loc)))^5 - (36*exp(-3*k*(-ip1 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip1 + thresh_loc)))^4 + (
+    14*exp(-2*k*(-ip1 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip1 + thresh_loc)))^3 - (
+      exp(-k*(-ip1 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip1 + thresh_loc)))^2
+
+  d42 <- (24*exp(-4*k*(-ip2 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip2 + thresh_loc)))^5 - (36*exp(-3*k*(-ip2 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip2 + thresh_loc)))^4 + (
+    14*exp(-2*k*(-ip2 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip2 + thresh_loc)))^3 - (
+      exp(-k*(-ip2 + thresh_loc))*k^4*y_max)/(1 + exp(-k*(-ip2 + thresh_loc)))^2
+
+  if(d41 > 0){
+    ip <- ip1
+  } else (
+    ip <- ip2
+  )
+
+  return(ip)
+
+}
+
+
+
 
