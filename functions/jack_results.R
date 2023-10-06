@@ -6,8 +6,8 @@
 #' required packages:
 #' mgcv (for fitting the gam)
 #' gratia (for derivative calculations),
-#' quantmod (for the findPeaks function to find max/mins in the derivatives),
-#' data.table (for between function to determine whether CIs contain 0)
+
+#' updates from version 2: also return the simultaneous intervals for each individual jackknife iteration
 
 
 #' function inputs:
@@ -39,8 +39,64 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
 
   for(i in 1:length(nsim)){ # for each simulation
 
+
     # subset the data for the ith simulation
     datIN <- simdt[which(simdt$sim == nsim[i]), ]
+
+
+    # first fit a gam to the whole data set
+    gam_full <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+
+    # gam predictions and simultaneous intervals
+    pred_full <- gratia::fitted_values(gam_full, data = xdt)
+    pred_full_up <- predict(loess(pred ~ driver, data=data.frame(pred = pred_full$upper, driver = xvals), span=span))
+    pred_full_mn <- predict(loess(pred ~ driver, data=data.frame(pred = pred_full$fitted, driver = xvals), span=span))
+    pred_full_low <- predict(loess(pred ~ driver, data=data.frame(pred = pred_full$lower, driver = xvals), span=span))
+
+    # first deriv
+    D1_full <- gratia::derivatives(gam_full, data = xdt, order = 1)
+    D1_full_up <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$upper, driver = xvals), span=span))
+    D1_full_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$derivative, driver = xvals), span=span))
+    D1_full_low <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$lower, driver = xvals), span=span))
+
+
+    D2_full <- gratia::derivatives(gam_full, data = xdt, order = 2)
+    D2_full_up <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$upper, driver = xvals), span=span))
+    D2_full_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$derivative, driver = xvals), span=span))
+    D2_full_low <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$lower, driver = xvals), span=span))
+
+
+    # save results
+    response_full_df <- data.frame(
+      sim = rep(nsim[i], length(xvals)),
+      driver = xvals,
+      output = rep("response", length(xvals)),
+      low = pred_full_low,
+      mn = pred_full_mn,
+      up = pred_full_up
+    )
+
+    d2_full_df <- data.frame(
+      sim = rep(nsim[i], length(xvals)),
+      driver = xvals,
+      output = rep("d2", length(xvals)),
+      low = D2_full_low,
+      mn = D2_full_mn,
+      up = D2_full_up
+    )
+
+
+    d1_full_df <- data.frame(
+      sim = rep(nsim[i], length(xvals)),
+      driver = xvals,
+      output = rep("d1", length(xvals)),
+      low = D1_full_low,
+      mn = D1_full_mn,
+      up = D1_full_up
+    )
+
+    full_df <- rbind(response_full_df, d2_full_df, d1_full_df)
+
 
     # make data set for the jackknife resampling
     dd <- datIN
@@ -49,10 +105,17 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
 
     # make holding matrix for the gam predictions
     pred <- matrix(NA,length(dd[,1]),length(xvals))
+    pred_lowi <- matrix(NA,length(dd[,1]),length(xvals))
+    pred_upi <- matrix(NA,length(dd[,1]),length(xvals))
 
     # make holding matrices for the derivatives
     D1 <- matrix(NA,length(dd[,1]),length(xvals)) # first derivative
+    D1_lowi <- matrix(NA,length(dd[,1]),length(xvals))
+    D1_upi <- matrix(NA,length(dd[,1]),length(xvals))
+
     D2 <- matrix(NA,length(dd[,1]),length(xvals)) # second derivative
+    D2_lowi <- matrix(NA,length(dd[,1]),length(xvals))
+    D2_upi <- matrix(NA,length(dd[,1]),length(xvals))
 
     # make matrix to keep track of the jackknife iterations
     jack_index <- matrix(NA,length(dd[,1]),length(xvals))
@@ -63,21 +126,45 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
       jackd <- dd[-int, ]
 
       gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the bootd data set
-      predi <- stats::predict(gami,se.fit=TRUE, newdata =xdt)$fit # get the gam's predictions
+      #predi <- stats::predict(gami,se.fit=TRUE, newdata =xdt)$fit # get the gam's predictions
+      #predis <- predict(loess(predi ~ driver, data=data.frame(predi = predi, driver = xvals), span=span))
 
-      predis <- predict(loess(predi ~ driver, data=data.frame(predi = predi, driver = xvals), span=span))
+      #D1i <- gratia::derivatives(gami, data = xdt, order = 1)$derivative # use the derivatives function from gratia to approximate 1st derivative for the values of the driver in xvals
+      #D2i <- gratia::derivatives(gami, data = xdt, order = 2)$derivative # use the derivatives function from gratia to approximate 2nd derivative for the values of the driver in xvals
+      #D1is <- predict(loess(D1i ~ driver, data=data.frame(D1i = D1i, driver = xvals), span=span))
+      #D2is <- predict(loess(D2i ~ driver, data=data.frame(D2i = D2i, driver = xvals), span=span))
 
-      D1i <- gratia::derivatives(gami, data = xdt, order = 1)$derivative # use the derivatives function from gratia to approximate 1st derivative for the values of the driver in xvals
-      D2i <- gratia::derivatives(gami, data = xdt, order = 2)$derivative # use the derivatives function from gratia to approximate 2nd derivative for the values of the driver in xvals
+      # gam predictions and simultaneous intervals
+      predi <- gratia::fitted_values(gami, data = xdt)
+      predi_up <- predict(loess(pred ~ driver, data=data.frame(pred = predi$upper, driver = xvals), span=span))
+      predi_mn <- predict(loess(pred ~ driver, data=data.frame(pred = predi$fitted, driver = xvals), span=span))
+      predi_low <- predict(loess(pred ~ driver, data=data.frame(pred = predi$lower, driver = xvals), span=span))
 
-      D1is <- predict(loess(D1i ~ driver, data=data.frame(D1i = D1i, driver = xvals), span=span))
+      # first deriv
+      D1i <- gratia::derivatives(gami, data = xdt, order = 1)
+      D1i_up <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$upper, driver = xvals), span=span))
+      D1i_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$derivative, driver = xvals), span=span))
+      D1i_low <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$lower, driver = xvals), span=span))
 
-      D2is <- predict(loess(D2i ~ driver, data=data.frame(D2i = D2i, driver = xvals), span=span))
+
+      D2i <- gratia::derivatives(gami, data = xdt, order = 2)
+      D2i_up <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$upper, driver = xvals), span=span))
+      D2i_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$derivative, driver = xvals), span=span))
+      D2i_low <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$lower, driver = xvals), span=span))
+
 
       # store these
-      pred[int, ] <- predis
-      D1[int, ] <- D1is
-      D2[int, ] <- D2is
+      pred[int, ] <- predi_mn
+      pred_lowi[int, ] <- predi_low
+      pred_upi[int, ] <- predi_up
+
+      D1[int, ] <- D1i_mn
+      D1_lowi[int, ] <- D1i_low
+      D1_upi[int, ] <- D1i_up
+
+      D2[int, ] <- D2i_mn
+      D2_lowi[int, ] <- D2i_low
+      D2_upi[int, ] <- D2i_up
 
       # store the jackknife iteration
       jack_index[int, ] <- rep(int, length(xvals))
@@ -119,8 +206,14 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
       # store results of each jackknifing iteration as well as just the quantiles
       # convert the storage matrixes to data frames (first need to transpose them)
       r_all <- c(t(pred)) # gam predictions (response)
+      r_all_up <- c(t(pred_upi)) # upper simultaneous interval
+      r_all_low <- c(t(pred_lowi)) # lower simultaneous interval
       D1_all <- c(t(D1)) # first deriv
+      D1_all_up <- c(t(D1_upi)) # upper simultaneous interval
+      D1_all_low <- c(t(D1_lowi)) # lower simultaneous interval
       D2_all <- c(t(D2)) # second deriv
+      D2_all_up <- c(t(D2_upi)) # upper simultaneous interval
+      D2_all_low <- c(t(D2_lowi)) # lower simultaneous interval
 
       int_all <- c(t(jack_index)) # indeces for jackknifing iterations
 
@@ -131,15 +224,23 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
         sim = rep(nsim[i], length(int_all)),
         jack_int = int_all,
         response = r_all,
+        response_up = r_all_up,
+        response_low = r_all_low,
         d1 = D1_all,
-        d2= D2_all
+        d1_up = D1_all_up,
+        d1_low = D1_all_low,
+        d2= D2_all,
+        d2_up = D2_all_up,
+        d2_low = D2_all_low
       )
 
   # store results for all simulations
   if(i == 1){ # if this was the first simulation
+  full_dfs <- full_df
   summ_dfs <- summ_df
   ind_dfs <- ind_df
   } else {
+    full_dfs <- rbind(full_df, full_dfs)
     summ_dfs <- rbind(summ_df, summ_dfs)
     ind_dfs <- rbind(ind_df, ind_dfs)
   }
@@ -147,6 +248,6 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
   }
 
   # return results
-  return(list(summ_dfs = summ_dfs, ind_dfs = ind_dfs))
+  return(list(summ_dfs = summ_dfs, ind_dfs = ind_dfs, full_dfs = full_dfs))
 
 }
