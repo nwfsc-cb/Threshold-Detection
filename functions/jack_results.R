@@ -8,22 +8,27 @@
 #' gratia (for derivative calculations),
 
 #' updates from version 2: also return the simultaneous intervals for each individual jackknife iteration
-
+#' updates from version 3: add eps argument, change xvals argument, and standardize the data
 
 #' function inputs:
 #' @param simdt data frame with the simulated data (output of simfun2)
-#' @param xvals vector of driver values to use for generating predictions from the gams and
+#' @param x_pred optional vector of driver values to use for generating predictions from the gams and
 #' calculating their derivatives
+#' @param xlength if x_pred = NA, make set of xvals for each dataset with length equal to max(100, xlength*range(driver))
+#' @param z_scale if TRUE, standardize the data before fitting (default), if FALSE use raw data
 #' @param sim_choice the simulation(s) in simdt for which to return the jackknifing results
 #' @param knots number of knots to use in the gam fitting, defaults to 4
 #' @param smooth_type type of smooth used with gams, defaults to "tp"
 #' @param span smoothing step/span for thresholds, values closer to 1 = more
 #' smoothing (Holsman et al. 2020 used 0.1 as default)
+#' @param eps_val eps value (the finite difference) for the gratia::derivatives function, defaults to 5*10^-6
+
 
 #' note: make sure knots, smooth_type, and span all have the same values as used in jack_thresh
 
 
-jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp", span = 0.1){
+jack_results <- function(simdt, sim_choice, x_pred, xlength = 50, z_scale = TRUE, knots = 4,
+                         smooth_type = "tp", eps_val = 5*10^-6, span = 0.1){
 
   # get the number of simulations that were run
   #nsim <- length(unique(simdt$sim))
@@ -32,20 +37,50 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
   nsim <- sim_choice
 
   # turn the driver values into a dataframe
+  if(is.na(x_pred[1])==F){
+
+    xvals <- x_pred
+
   xdt <- data.frame(
-    driver = xvals
+    driver = x_pred
   )
+  }
 
 
   for(i in 1:length(nsim)){ # for each simulation
 
 
-    # subset the data for the ith simulation
+    # subset the data for the ith simulation and standardize
     datIN <- simdt[which(simdt$sim == nsim[i]), ]
+
+    if(z_scale==TRUE){
+    datIN$driver <- zfun(datIN$driver)
+    datIN$obs_response <- zfun(datIN$obs_response)
+    }
+
+    # get the xvals
+    if(is.na(x_pred[1])==T){
+
+      rangei <- max(datIN$driver, na.rm = T) - min(datIN$driver, na.rm = T)
+      xvals <- seq(from = min(datIN$driver, na.rm = T), to = max(datIN$driver, na.rm = T), length.out =max(100, rangei*xlength))# make sure length is at least 100
+
+      xdt <- data.frame(
+        driver = xvals
+      )
+
+    }
 
 
     # first fit a gam to the whole data set
+
     gam_full <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+
+
+     #if(z_scale==TRUE){
+      #gam_full <- gam(obs_response~ -1 + s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+    #} else{
+     # gam_full <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+    #}
 
     # gam predictions and simultaneous intervals
     pred_full <- gratia::fitted_values(gam_full, data = xdt)
@@ -54,13 +89,13 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
     pred_full_low <- predict(loess(pred ~ driver, data=data.frame(pred = pred_full$lower, driver = xvals), span=span))
 
     # first deriv
-    D1_full <- gratia::derivatives(gam_full, data = xdt, order = 1)
+    D1_full <- gratia::derivatives(gam_full, data = xdt, order = 1, eps = eps_val)
     D1_full_up <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$upper, driver = xvals), span=span))
     D1_full_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$derivative, driver = xvals), span=span))
     D1_full_low <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$lower, driver = xvals), span=span))
 
 
-    D2_full <- gratia::derivatives(gam_full, data = xdt, order = 2)
+    D2_full <- gratia::derivatives(gam_full, data = xdt, order = 2, eps = eps_val)
     D2_full_up <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$upper, driver = xvals), span=span))
     D2_full_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$derivative, driver = xvals), span=span))
     D2_full_low <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$lower, driver = xvals), span=span))
@@ -125,7 +160,14 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
       # remove this observation from the dataset
       jackd <- dd[-int, ]
 
-      gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the bootd data set
+      gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
+
+       #if(z_scale==TRUE){
+        #gami <- gam(obs_response~ -1+ s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
+     # } else{
+        #gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
+     # }
+
       #predi <- stats::predict(gami,se.fit=TRUE, newdata =xdt)$fit # get the gam's predictions
       #predis <- predict(loess(predi ~ driver, data=data.frame(predi = predi, driver = xvals), span=span))
 
@@ -141,13 +183,13 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
       predi_low <- predict(loess(pred ~ driver, data=data.frame(pred = predi$lower, driver = xvals), span=span))
 
       # first deriv
-      D1i <- gratia::derivatives(gami, data = xdt, order = 1)
+      D1i <- gratia::derivatives(gami, data = xdt, order = 1, eps = eps_val)
       D1i_up <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$upper, driver = xvals), span=span))
       D1i_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$derivative, driver = xvals), span=span))
       D1i_low <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$lower, driver = xvals), span=span))
 
 
-      D2i <- gratia::derivatives(gami, data = xdt, order = 2)
+      D2i <- gratia::derivatives(gami, data = xdt, order = 2, eps = eps_val)
       D2i_up <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$upper, driver = xvals), span=span))
       D2i_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$derivative, driver = xvals), span=span))
       D2i_low <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$lower, driver = xvals), span=span))
@@ -251,3 +293,10 @@ jack_results <- function(simdt, xvals, sim_choice, knots = 4, smooth_type = "tp"
   return(list(summ_dfs = summ_dfs, ind_dfs = ind_dfs, full_dfs = full_dfs))
 
 }
+
+
+# function for standardizing data
+zfun <- function(x){
+  (x-mean(x, na.rm = T))/sd(x, na.rm = T)
+}
+

@@ -5,13 +5,14 @@
 #' pracma (for the findpeaks function to find max/mins in the derivatives),
 #' data.table (for between function to determine whether CIs contain 0)
 
-#' update from v4: change the significance criteria to either none or using simultaneous
-#' intervals for each jackknife iteration, also remove the thresh_choice component (always just select one threshold)
+#' update from v5: add eps argument, change xvals argument, and standardize the data
 
 #' function inputs:
 #' @param simdt data frame with the simulated data (output of simfun2)
-#' @param xvals vector of driver values to use for generating predictions from the gams and
+#' @param x_pred optional vector of driver values to use for generating predictions from the gams and
 #' calculating their derivatives
+#' @param xlength if x_pred = NA, make set of xvals for each dataset with length equal to max(100, xlength*range(driver))
+#' @param z_scale if TRUE, standardize the data before fitting (default), if FALSE use raw data
 #' @param thresh_methods vector of methods to use for estimating the threshold location.
 #' Can include `abs_max_d2` (location where 2nd deriv of gam is furthest from zero), `min_d2`
 #' (location where 2nd deriv is at its minimum- i.e., most negative- value), `zero_d2`
@@ -27,26 +28,36 @@
 #' @param smooth_type type of smooth used with gams, defaults to "tp"
 #' @param span smoothing step/span for thresholds, values closer to 1 = more smoothing (defaults to
 #' 0.1, used by Holsman et al. 2020)
+#' @param eps_val eps value (the finite difference) for the gratia::derivatives function, defaults to 5*10^-6
 #' @param pk_height minimum absolute height of a peak in the derivative (relative to median value of the deriv)
 #' required for that peak to be returned by the findpeaks function
 #' @param pk_ups minimum number of increasing steps before a peak is reached (and decreasing steps after the peak)
 #' required for a peak to be returned by the findpeaks function
 
 
-jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2", "zero_d2", "zero_d1"),
+jack_thresh <- function(simdt, x_pred, xlength = 50, z_scale = TRUE, thresh_methods = c("abs_max_d2", "min_d2", "zero_d2", "zero_d1"),
                         sig_criteria = c("none", "jack_quant", "sim_int"), alpha = 0.05, knots = 4,
-                        smooth_type = "tp", span = 0.1, pk_height = 0.05, pk_ups = 3){
+                        smooth_type = "tp", eps_val = 5*10^-6, span = 0.1, pk_height = 0.05, pk_ups = 3){
 
   # get the number of simulations that were run
   nsim <- length(unique(simdt$sim))
 
   # get the true value of the threshold (for calculating rmse)
-  thresh_loc <- simdt$thresh_loc[1]
+  if(z_scale==TRUE){
+  thresh_loc <- simdt$thresh_loc_z[1]
+  } else{
+    thresh_loc <- simdt$thresh_loc[1]
+  }
 
   # turn the driver values into a dataframe
-  xdt <- data.frame(
-    driver = xvals
-  )
+  if(is.na(x_pred[1])==F){
+
+    xvals <- x_pred
+
+    xdt <- data.frame(
+      driver = x_pred
+    )
+  }
 
   # findpeaks parameters to put into the functions for finding maxes and mins
   pk_height1 <- pk_height
@@ -75,8 +86,26 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
 
   for(i in 1:nsim){ # for each simulation
 
-    # subset the data for the ith simulation
+    # subset the data for the ith simulation and standardize
     datIN <- simdt[which(simdt$sim == i), ]
+
+    if(z_scale==TRUE){
+    datIN$driver <- zfun(datIN$driver)
+    datIN$obs_response <- zfun(datIN$obs_response)
+    }
+
+
+    # get the xvals
+    if(is.na(x_pred[1])==T){
+
+      rangei <- max(datIN$driver, na.rm = T) - min(datIN$driver, na.rm = T)
+      xvals <- seq(from = min(datIN$driver, na.rm = T), to = max(datIN$driver, na.rm = T), length.out =max(100, rangei*xlength))# make sure length is at least 100
+
+      xdt <- data.frame(
+        driver = xvals
+      )
+
+    }
 
     # store the means and sd's of the driver
     #x_means[i] <- mean(datIN$driver)
@@ -85,15 +114,23 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
     # first fit a gam to the whole data set and see whether a threshold was detected
     gam_full <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
 
+    #if(z_scale==TRUE){
+    #gam_full <- gam(obs_response~ -1 + s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+    #} else{
+      #gam_full <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = datIN) # fit a gam to the jackd data set
+   # }
+
+
+
     # calculate the smoothed derivatives of the gam (smooth them because the second deriv can be really noisy)
     # first deriv
-    D1_full <- gratia::derivatives(gam_full, data = xdt, order = 1)
+    D1_full <- gratia::derivatives(gam_full, data = xdt, order = 1, eps = eps_val)
     D1_full_up <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$upper, driver = xvals), span=span))
     D1_full_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$derivative, driver = xvals), span=span))
     D1_full_low <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_full$lower, driver = xvals), span=span))
 
     # second deriv
-    D2_full <- gratia::derivatives(gam_full, data = xdt, order = 2)
+    D2_full <- gratia::derivatives(gam_full, data = xdt, order = 2, eps = eps_val)
     D2_full_up <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$upper, driver = xvals), span=span))
     D2_full_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$derivative, driver = xvals), span=span))
     D2_full_low <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_full$lower, driver = xvals), span=span))
@@ -294,13 +331,19 @@ jack_thresh <- function(simdt, xvals, thresh_methods = c("abs_max_d2", "min_d2",
 
       gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
 
-      D1i <- gratia::derivatives(gami, data = xdt, order = 1)
+      #if(z_scale==TRUE){
+      #gami <- gam(obs_response~ -1+ s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
+      #} else{
+       # gami <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = jackd) # fit a gam to the jackd data set
+      #}
+
+      D1i <- gratia::derivatives(gami, data = xdt, order = 1, eps = eps_val)
       D1_up[int, ] <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$upper, driver = xvals), span=span))
       D1[int, ] <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$derivative, driver = xvals), span=span))
       D1_low[int, ] <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1i$lower, driver = xvals), span=span))
 
       # second deriv
-      D2i <- gratia::derivatives(gami, data = xdt, order = 2)
+      D2i <- gratia::derivatives(gami, data = xdt, order = 2, eps = eps_val)
       D2_up[int, ] <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$upper, driver = xvals), span=span))
       D2[int, ] <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$derivative, driver = xvals), span=span))
       D2_low[int, ] <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2i$lower, driver = xvals), span=span))
@@ -883,7 +926,10 @@ root_threshF <- function(deriv_i, sig_type, xvals, deriv_up, deriv_low){
 
 
 
-
+# function for standardizing data
+zfun <- function(x){
+  (x-mean(x, na.rm = T))/sd(x, na.rm = T)
+}
 
 
 
