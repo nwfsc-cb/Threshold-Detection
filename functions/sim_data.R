@@ -3,6 +3,9 @@
 #' it could be either Beverton-Holt or decrease then flat; also modified the gamma function so the curve
 #' can be concave up or concave down
 
+
+#' updates: also return true value of the threshold converted to the scale of the standardized data
+
 #' @param nsim number of simulations
 #' @param tmax length of simulated time series
 #' @param driver_pars A named list controlling the driver (predictor) values simulated, including
@@ -81,6 +84,9 @@ sim_data <- function(nsim = 100, tmax = 30,
       #b <- driver_pars$x_mean + (driver_pars$x_sd * sqrt(12)) / 2
       xset <- runif(tmax, min = a, max = b)
     }
+
+    # get the threshold location on the standardized scale
+    thresh_loc_true_z <- (thresh_loc_true - mean(xset))/sd(xset)
 
     if(fun == "skew") {
       # generate with a lognormal density
@@ -194,6 +200,7 @@ sim_data <- function(nsim = 100, tmax = 30,
                      response = yset, # true value of response at each time step
                      obs_response = yobset, # observed value of response at each time step,
                      thresh_loc = rep(thresh_loc_true, tmax),
+                     thresh_loc_z = rep(thresh_loc_true_z, tmax),
                      beta = rep(beta, tmax), # slope of relationship btw covariate and response
                      sim = rep(s, tmax) # which simulation this was
     )
