@@ -1,0 +1,2459 @@
+---
+title: "run_simulations"
+author: "Raine Detmer"
+date: "2023-09-30"
+output: html_document
+---
+
+README: run the simulations to evaluate GAM robustness
+
+should take around 3.5 hours to run with 100 replicates
+
+
+```{r, include=FALSE}
+library("mgcv")
+library("gratia")
+library("tidyverse")
+#library("quantmod") # for findPeaks function
+library("pracma") # for the findpeaks function
+library("data.table") #for between() function
+
+library("tictoc") # for timing
+
+
+source("load_functions.R") # loads all the functions in the "functions" folder
+
+
+```
+
+# metapars
+
+```{r}
+
+# number of replicate simulations to run
+nsim1 <- 100 #50
+
+# driver values for generating predictions
+#xvals1 <- seq(from = 0, to = 6, by = 0.01)
+xvals1 <- seq(from = -3, to = 3, by = 0.01)
+
+
+```
+
+# focal functions
+
+
+skew, hs, sigmoidal, linear
+
+```{r}
+
+# control pars for each driver-response relationship
+# sigmoid v1
+control_pars_sg1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# skew v1 (concave down)
+control_pars_sk1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "down", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# hockey stick v1
+control_pars_hs1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# linear
+control_pars_ln1 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 0.5, lin_b = 0) # changed m from 1 to 0.5
+
+
+```
+
+
+### basic pars
+```{r}
+# parameters
+
+obs_set <- c(0.0275, 0.55, 2.75) # sd of observation error; correspond to CV values of approximately 0.01, 0.2, and 1
+ts_set <- c(15, 25, 35) # time series lengths
+quant_set <- c(0.05, 0.25, 0.5) # threshold quantiles
+
+cov_sd_set1 <- c(0) # sd of covariate values
+
+# make matrix with all the parameter combinations to be used in the simulations
+parmat1 <- unname(as.matrix(expand.grid(obs_set[2], ts_set, quant_set[2], cov_sd_set1[1])))
+parmat2 <- unname(as.matrix(expand.grid(obs_set, ts_set[2], quant_set[2], cov_sd_set1[1])))
+parmat3 <- unname(as.matrix(expand.grid(obs_set[2], ts_set[2], quant_set, cov_sd_set1[1])))
+
+parmat <- rbind(parmat1, parmat2, parmat3)
+
+parmat <- unique(parmat) # make sure only unique combinations are used
+#parmat
+
+#parmat <- as.matrix(matrix(parmat[1,], ncol = 4))
+
+#parmat
+
+```
+
+## skew
+
+simulations for skew driver-response relationship
+
+```{r}
+# simulations
+
+# first simulate the datasets and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ # for each parameter combination
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE) # parameters for driver
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat[p, 4], cov_int = NA) # parameters for covariate
+  
+  # simulate nsim1 replicate data sets for the pth parameter combination
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+# check for nonlinear driver-response relationship in each data set
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(ln_p)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+#View(thresh_pj)
+
+sk_jdf <- jdf
+sk_jdf$shape <- rep("skew", length(sk_jdf$sim)) # add shape of driver-response relationship
+sk_jdf$best_mod <- lndf$best_mod # column indicating which model was best (based on AIC)
+sk_jdf$aic_diff <- lndf$aic_diff # column with difference in AIC values of best and next-best model
+
+```
+
+
+## sigmoidal
+
+simulations for sigmoidal driver-response relationship
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg_jdf <- jdf
+sg_jdf$shape <- rep("sigmoidal", length(sg_jdf$sim))
+sg_jdf$best_mod <- lndf$best_mod
+sg_jdf$aic_diff <- lndf$aic_diff
+
+
+```
+
+
+## hockeystick
+
+simulations for hockeystick driver-response relationship
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_jdf <- jdf
+hs_jdf$shape <- rep("hockeystick", length(hs_jdf$sim))
+hs_jdf$best_mod <- lndf$best_mod
+hs_jdf$aic_diff <- lndf$aic_diff
+
+#View(hs_jdf)
+
+```
+
+
+## linear
+
+simulations for linear driver-response relationship
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat[p, 2], driver_pars = driver_pars_p, obs_sd = parmat[p, 1], fun = "linear", control_pars = control_pars_ln1, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_jdf <- jdf
+ln_jdf$shape <- rep("linear", length(ln_jdf$sim))
+ln_jdf$best_mod <- lndf$best_mod
+ln_jdf$aic_diff <- lndf$aic_diff
+
+
+```
+
+
+
+## save results
+
+combine all the above results together and save them as a .csv
+
+```{r}
+
+focal_df <- rbind(sk_jdf, sg_jdf, hs_jdf, ln_jdf)
+write.csv(focal_df, "simulation outputs/focal_results.csv")
+
+```
+
+
+# missing cov
+
+missing covariate = covariate affects the response but it is not included in the estimation models (i.e, the linear models and GAMs fit to the simulated data)
+
+covariate parameters
+
+```{r}
+# parameters
+
+# cov value for generating marginal predictions of the driver-response relationship (for scenarios where the covariate is included in the estimation models)
+cov_val1 <- 0 # mean on standardized scale
+
+obs_set_cov <- c(0.0275) # use the lowest obs error to make the effect of the cov clearer 
+ts_set_cov <- c(25) # default time series length
+quant_set_cov <- c(0.25) # default threshold quantile
+
+cov_sd_set <- c(0.5, 1) # sd of covariate, don't need to redo the sd = 0 case since this the above simulations all had cov_sd = 0
+
+# matrix with parameter combinations
+parmatc1 <- unname(as.matrix(expand.grid(obs_set_cov[1], ts_set_cov[1], quant_set_cov[1], cov_sd_set)))
+
+parmatc <- parmatc1
+
+#parmatc
+
+```
+
+
+## linear cov
+
+simulations for case where the covariate has a linear relationship with the response
+
+```{r}
+
+type_choice <- "linear" 
+
+```
+
+all shapes
+
+### skew
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+# check for nonlinearity
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(ln_p)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+#View(thresh_pj)
+
+sk_cov_jdf <- cov_jdf
+sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
+sk_cov_jdf$best_mod <- cov_lndf$best_mod
+sk_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+```
+
+
+### sigmoidal
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg_cov_jdf <- cov_jdf
+sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
+sg_cov_jdf$best_mod <- cov_lndf$best_mod
+sg_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+### hockeystick
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_cov_jdf <- cov_jdf
+hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
+hs_cov_jdf$best_mod <- cov_lndf$best_mod
+hs_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+
+### linear
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "linear", control_pars = control_pars_ln1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_cov_jdf <- cov_jdf
+ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
+ln_cov_jdf$best_mod <- cov_lndf$best_mod
+ln_cov_jdf$aic_diff <- cov_lndf$aic_diff
+#View(hs_cov_jdf)
+
+```
+
+
+
+### save results
+
+save all of the results for missing (i.e., not included in estimation models) linear covariate as a .csv
+
+```{r}
+lin_cov_df <- rbind(sk_cov_jdf, sg_cov_jdf, hs_cov_jdf, ln_cov_jdf)
+write.csv(lin_cov_df, "simulation outputs/lin_cov.csv")
+
+#View(lin_cov_df)
+
+```
+
+## exp cov
+
+simulations for case where the covariate has a nonlinear (exponential) relationship with the response
+
+```{r}
+
+type_choice <- "exponential"
+
+```
+
+all shapes
+
+### skew
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  #cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+# check for nonlinearity
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(ln_p)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+#View(thresh_pj)
+
+sk_cov_jdf <- cov_jdf
+sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
+sk_cov_jdf$best_mod <- cov_lndf$best_mod
+sk_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+```
+
+
+
+### sigmoidal
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg_cov_jdf <- cov_jdf
+sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
+sg_cov_jdf$best_mod <- cov_lndf$best_mod
+sg_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+
+
+```
+
+
+### hockeystick
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_cov_jdf <- cov_jdf
+hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
+hs_cov_jdf$best_mod <- cov_lndf$best_mod
+hs_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+### linear
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "linear", control_pars = control_pars_ln1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_cov_jdf <- cov_jdf
+ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
+ln_cov_jdf$best_mod <- cov_lndf$best_mod
+ln_cov_jdf$aic_diff <- cov_lndf$aic_diff
+#View(hs_cov_jdf)
+
+```
+
+
+### save results
+
+save all of the results for missing (i.e., not included in estimation models) exponential covariate as a .csv
+
+```{r}
+exp_cov_df <- rbind(sk_cov_jdf, sg_cov_jdf, hs_cov_jdf, ln_cov_jdf)
+write.csv(exp_cov_df, "simulation outputs/exp_cov.csv")
+
+```
+
+# with covariate
+
+with covariate = covariate affects the response and it is included in the estimation models (i.e, the linear models and GAMs fit to the simulated data)
+
+
+## linear cov
+
+covariate has a linear effect on the response
+
+```{r}
+
+type_choice <- "linear"
+
+```
+
+all shapes
+
+### skew
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  #cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+# check for nonlinearity
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(ln_p)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+#View(thresh_pj)
+
+sk_cov_jdf <- cov_jdf
+sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
+sk_cov_jdf$best_mod <- cov_lndf$best_mod
+sk_cov_jdf$next_mod <- cov_lndf$next_mod
+sk_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+```
+
+
+### sigmoidal
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg_cov_jdf <- cov_jdf
+sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
+sg_cov_jdf$best_mod <- cov_lndf$best_mod
+sg_cov_jdf$next_mod <- cov_lndf$next_mod
+sg_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+
+```
+
+
+
+### hockeystick
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_cov_jdf <- cov_jdf
+hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
+hs_cov_jdf$best_mod <- cov_lndf$best_mod
+hs_cov_jdf$next_mod <- cov_lndf$next_mod
+hs_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+
+### linear
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "linear", control_pars = control_pars_ln1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_cov_jdf <- cov_jdf
+ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
+ln_cov_jdf$best_mod <- cov_lndf$best_mod
+ln_cov_jdf$next_mod <- cov_lndf$next_mod
+ln_cov_jdf$aic_diff <- cov_lndf$aic_diff
+#View(hs_cov_jdf)
+
+```
+
+
+
+### save results
+
+save all of the results for linear covariate that was included in the estimation models as a .csv
+
+```{r}
+lin_cov0_df <- rbind(sk_cov_jdf, sg_cov_jdf, hs_cov_jdf, ln_cov_jdf)
+write.csv(lin_cov0_df, "simulation outputs/lin_cov0.csv")
+
+
+```
+
+## exp cov
+
+covariate has an exponential effect on the response
+
+```{r}
+
+type_choice <- "exponential"
+
+```
+
+all shapes
+
+### skew
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "skew", control_pars = control_pars_sk1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+# check for nonlinearity
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(ln_p)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+#View(thresh_pj)
+
+sk_cov_jdf <- cov_jdf
+sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
+sk_cov_jdf$best_mod <- cov_lndf$best_mod
+sk_cov_jdf$next_mod <- cov_lndf$next_mod
+sk_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+```
+
+
+### sigmoidal
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "sigmoidal", control_pars = control_pars_sg1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg_cov_jdf <- cov_jdf
+sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
+sg_cov_jdf$best_mod <- cov_lndf$best_mod
+sg_cov_jdf$next_mod <- cov_lndf$next_mod
+sg_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+
+### hockeystick
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "hockeystick", control_pars = control_pars_hs1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_cov_jdf <- cov_jdf
+hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
+hs_cov_jdf$best_mod <- cov_lndf$best_mod
+hs_cov_jdf$next_mod <- cov_lndf$next_mod
+hs_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+#View(hs_cov_jdf)
+
+```
+
+
+
+### linear
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmatc[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmatc[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmatc[p, 2], driver_pars = driver_pars_p, obs_sd = parmatc[p, 1], fun = "linear", control_pars = control_pars_ln1, cov_pars = cov_pars_p, cov_type = type_choice) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check_cov(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmatc[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmatc[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmatc[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmatc[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_lndf <- ln_p
+  } else {
+    cov_lndf <- rbind(ln_p, cov_lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+#View(cov_lndf)
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmatc[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh_cov(dt_p, xvals1, cov_val = cov_val1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmatc[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmatc[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmatc[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmatc[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    cov_jdf <- thresh_pj
+  } else {
+    cov_jdf <- rbind(thresh_pj, cov_jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_cov_jdf <- cov_jdf
+ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
+ln_cov_jdf$best_mod <- cov_lndf$best_mod
+ln_cov_jdf$next_mod <- cov_lndf$next_mod
+ln_cov_jdf$aic_diff <- cov_lndf$aic_diff
+
+
+```
+
+
+
+### save results
+
+save all of the results for an exponential covariate that was included in the estimation models as a .csv
+
+```{r}
+exp_cov0_df <- rbind(sk_cov_jdf, sg_cov_jdf, hs_cov_jdf, ln_cov_jdf)
+write.csv(exp_cov0_df, "simulation outputs/exp_cov0.csv")
+
+
+```
+
+# nonfocal functions
+
+supplementary simulations with "nonfocal" functions (i.e., translated, rotated, etc. versions of the focal skew, sigmoidal, hockeystick, and linear functions explored in the main text)
+
+
+```{r}
+
+# control pars for each driver-response relationship
+# sigmoid v2
+control_pars_sg2 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = -1.5, lin_m = 1, lin_b = 0)
+
+# skew v2 (concave up)
+control_pars_sk2 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# hockey stick v2
+control_pars_hs2 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 2, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# step
+control_pars_st <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = 3, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 1, lin_b = 0)
+
+# linear 2 (flat)
+control_pars_ln2 <- list(thresh_loc = 3, thresh_loc_sd = 0, y_max = 3, y_min = 0, hs_type = 1, hs_a = NULL, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = 0, lin_b = 1.5)
+
+
+```
+
+
+### basic pars
+```{r}
+# parameters
+
+# number of simulations to run
+#nsim1 <- 50 
+
+# driver values for generating predictions
+#xvals1 <- seq(from = -3, to = 3, by = 0.01)
+
+
+#obs_set <- c(0.0275, 0.55, 2.75) 
+#ts_set <- c(15, 25, 35) 
+#quant_set <- c(0.05, 0.25, 0.5) 
+
+#cov_sd_set1 <- c(0, 0.5) # sd of cov values
+
+# matrix with parameter combinations: default parameter values
+parmat2 <- as.matrix(matrix(c(obs_set[2], ts_set[2], quant_set[2], cov_sd_set1[1]), ncol = 4))
+
+parmat2 <- unique(parmat2)
+
+#parmat2
+
+```
+
+## step
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat2[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat2[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat2[p, 2], driver_pars = driver_pars_p, obs_sd = parmat2[p, 1], fun = "hockeystick", control_pars = control_pars_st, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat2[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat2[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat2[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat2[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat2[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat2[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat2[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat2[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+st_jdf <- jdf
+st_jdf$shape <- rep("step", length(st_jdf$sim))
+st_jdf$best_mod <- lndf$best_mod
+st_jdf$aic_diff <- lndf$aic_diff
+
+
+```
+
+86.848 sec elapsed
+173.982 sec elapsed
+
+
+## skew
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat2[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat2[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat2[p, 2], driver_pars = driver_pars_p, obs_sd = parmat2[p, 1], fun = "skew", control_pars = control_pars_sk2, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat2[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat2[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat2[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat2[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat2[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat2[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat2[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat2[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sk2_jdf <- jdf
+sk2_jdf$shape <- rep("skew", length(sk2_jdf$sim))
+sk2_jdf$best_mod <- lndf$best_mod
+sk2_jdf$aic_diff <- lndf$aic_diff
+#View(hs_jdf)
+
+```
+
+
+## sigmoidal
+
+NOTE: for the sigmoidal v2 example, the "risk-averse" and "risk-prone" sides are flipped, so use 1-thresh_quant to keep the center of the driver data on the "risk-averse" side, as in all the other cases explored here
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = 1-parmat2[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat2[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat2[p, 2], driver_pars = driver_pars_p, obs_sd = parmat2[p, 1], fun = "sigmoidal", control_pars = control_pars_sg2, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat2[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat2[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat2[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat2[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat2[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat2[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat2[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat2[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+sg2_jdf <- jdf
+sg2_jdf$shape <- rep("sigmoidal", length(sg2_jdf$sim))
+sg2_jdf$best_mod <- lndf$best_mod
+sg2_jdf$aic_diff <- lndf$aic_diff
+
+
+```
+
+
+
+## hockeystick
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat2[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat2[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat2[p, 2], driver_pars = driver_pars_p, obs_sd = parmat2[p, 1], fun = "hockeystick", control_pars = control_pars_hs2, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat2[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat2[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat2[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat2[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat2[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat2[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat2[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat2[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs2_jdf <- jdf
+hs2_jdf$shape <- rep("hockeystick", length(hs2_jdf$sim))
+hs2_jdf$best_mod <- lndf$best_mod
+hs2_jdf$aic_diff <- lndf$aic_diff
+
+
+```
+
+
+## linear
+
+```{r}
+# simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat2[p, 3], x_df = 10, x_sd = 1, uniform = FALSE)
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat2[p, 4], cov_int = NA)
+  
+  dt_p <- sim_data(nsim = nsim1, tmax = parmat2[p, 2], driver_pars = driver_pars_p, obs_sd = parmat2[p, 1], fun = "linear", control_pars = control_pars_ln2, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p)
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat2[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat2[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat2[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat2[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat2[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1)
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat2[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat2[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat2[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat2[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln2_jdf <- jdf
+ln2_jdf$shape <- rep("linear", length(ln2_jdf$sim))
+ln2_jdf$best_mod <- lndf$best_mod
+ln2_jdf$aic_diff <- lndf$aic_diff
+#View(hs_jdf)
+
+```
+
+
+## save results
+
+save the results of these simulations
+
+```{r}
+
+nonfocal_df <- rbind(sk2_jdf, sg2_jdf, hs2_jdf, ln2_jdf, st_jdf)
+write.csv(nonfocal_df, "simulation outputs/nonfocal_results.csv")
+
+```
+
+

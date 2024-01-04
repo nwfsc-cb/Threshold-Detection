@@ -1,0 +1,1374 @@
+---
+title: "hake_example"
+author: "Raine Detmer"
+date: "2023-12-12"
+output: html_document
+---
+
+
+README: code for analyses of spatial hake-temperature relationships. Note this Rmd requires the hake acoustic survey data and temperature data from Malick et al. 2020 to run, but these are from Mike Malick and aren't uploaded to the github repo
+
+
+```{r}
+library("mgcv")
+library("gratia")
+library("tidyverse")
+library("pracma") # for findpeaks function
+#library("data.table") #for between() function
+
+library("tictoc") # for timing
+
+# look for thresholds
+source("load_functions.R") # loads all the functions in the "functions" folder
+
+options(dplyr.summarise.inform = FALSE)# get rid of the "summarize has grouped output by..." warnings
+
+
+```
+
+
+
+# data prep
+
+data are from Malick et al. 2020:
+
+Malick MJ, Hunsicker ME, Haltuch MA, Parker-Stetter SL, Berger AM, Marshall KN (2020) Relationships between temperature and Pacific hake distribution vary across latitude and life-history stage. Mar Ecol Prog Ser 639:185-197. https://doi.org/10.3354/meps13286 
+
+Biomass data from acoustic hake survey
+- The 'wgt_total' column gives total biomass for a location in kg
+- The age specific columns give the age-specific biomass for a location in kg
+
+Temperature data
+- the "raw" data (temperature_100m_data_2022_02_04.csv), contain the temperature at 100 meters directly from the measurement instrument (e.g., CTD)
+- The other file (temperature_100m_interp_2022_02_04.csv) has the spatially interpolated temperature at 100 m variable prepared by Michael Malick, which was used used in Malick et al. 2020's analyses
+
+
+read in the data: 
+
+```{r}
+
+hakebm <- read.csv("hake_data/hake_biomass_2022_02_04.csv")
+
+haketmp <- read.csv("hake_data/temperature_100m_data_2022_02_04.csv")
+
+haketmpint <- read.csv("hake_data/temperature_100m_interp_2022_02_04.csv")
+
+
+# look at the data structure
+
+#head(hakebm)
+
+#str(hakebm)
+# columns are lon, lat, year, transect, present_total (total number?), wgt_total (total biomass), are columns for age 2 through age 20, also columns for groups age 3-4 and age 5-20 
+
+#str(haketmpint)
+
+
+```
+
+
+note on sampling variability:
+
+from Malick et al. (2020): "surveys moved northward along the west coast of North America until approximately Dixon Entrance (~54.5° N), or to the latitude at which hake were no longer detected. Survey transects extended from about 50 m bottom depth nearshore to 1500 m, or 64.8 km (35 nautical miles) offshore, whichever was further. If hake were observed at the offshore end of a transect, the transect was continued for 0.926 km (0.5 n miles) beyond the end of the hake aggregation."
+
+to deal with this, we decided to only use data from transects within the common spatial extent of the survey across all years
+
+```{r}
+
+#head(hakebm)
+hake1 <- hakebm[ , c(1:4, 5, 6, 16, 21, 42:46)] # don't need all 46 columns
+
+# add column indicating what country the survey location is in
+# Canadian boundary is the 49th parallel
+hake1$country <- ifelse(hake1$lat > 49, "CA", "US")
+
+# calculate common survey extent: for each year get the max and min latitude of the survey, then get the lowest max latitude and the highest min latitude across all years and use these as the boundaries of the common survey extent. Then filter all survey locations within this common region. Then for each year, get the total biomass of all hake, age2, ages 3-4, and ages 5-20 in each country
+hake1 <- hake1 %>% group_by(year) %>% mutate(N_max = max(lat), N_min = min(lat)) %>% ungroup() %>% mutate(up_ext = min(N_max), low_ext = max(N_min)) %>% filter(lat <= up_ext) %>% filter(lat >= low_ext) %>% group_by(year) %>% mutate(lat_mx = max(lat), lat_mn = min(lat)) %>% ungroup() %>% group_by(year, country, lat_mx, lat_mn) %>% summarise(wgt_total = sum(wgt_total), age2 = sum(age2), age3_4 = sum(age3_4), age5_20 = sum(age5_20), samp_pts = n(), trans = length(unique(transect))) %>% ungroup()
+
+
+#View(hake1) # the survey limits aren't all exactly the same because the transects weren't in the exact same locations each year? I.e., the highest lat in a given year is going to be the lat that was closest to the lowest max lat across all years without going above that max
+
+# check the common extent is correct
+#max(hake1$lat_mx)
+#min(hake1$lat_mn)
+#hakebm %>% group_by(year) %>% summarize(N_max = max(lat), N_min = min(lat)) %>% summarize(up_ext = min(N_max), low_ext = max(N_min))
+
+# subset out the hake data from the US
+hake_US <- hake1 %>% filter(country=="US") %>% dplyr::select(-country)
+colnames(hake_US) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("US", 6), sep = "_"))
+
+#View(hake_US)
+
+# subset out the hake data from CA
+hake_CA <- hake1 %>% filter(country=="CA") %>% select(-country)
+colnames(hake_CA) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("CA", 6), sep = "_"))
+
+# join these together
+hake2 <- left_join(hake_US, hake_CA, by = c("year", "lat_mx", "lat_mn")) 
+
+#View(hake2)
+
+# add columns w/ proportions of biomass in CA
+hake3 <- hake2 %>% mutate(wgt_total_CA_US = wgt_total_CA/(wgt_total_CA + wgt_total_US), age2_CA_US = age2_CA/(age2_CA + age2_US), age3_4_CA_US = age3_4_CA/(age3_4_CA + age3_4_US), age5_20_CA_US = age5_20_CA/(age5_20_CA + age5_20_US)) #, samp_CA_US = samp_eff_CA/(samp_eff_CA + samp_eff_US), trans_CA_US = trans_CA/(trans_CA + trans_US)
+
+#View(hake3)
+
+```
+
+
+For the temperature data, we used the interpolated temperatures at 100m from Malick et al. 2020, who
+"... used the 50 km interpolated surfaces of temperature at 100 m to calculate grid-cell specific temperature anomalies; we first calculated the average temperature for each grid cell across all survey years and then subtracted the average temperature value from the grid-cell-specific annual temperature values. We used these temperature anomalies at 100 m as our primary temperature variable throughout the analysis."
+
+
+```{r}
+
+#View(haketmpint)
+
+# filter out the interpolated temperatures between 45 and 49ºN (region over which Malick et al. 2020 found a negative relationship between temperature and adult hake biomass), then get the average temperature and temperature anomaly in this region each year
+tmpint1 <- haketmpint %>% filter(lat >=45) %>% filter(lat <=49) %>% group_by(year) %>% summarize(temp_100 = mean(temp_100), temp_100_anom = mean(temp_100_anom))
+
+#View(tmpint1)
+
+# join this with the hake data for each year
+hake4 <- left_join(hake3, tmpint1, by = "year")
+
+
+#View(hake4)
+
+```
+
+
+
+```{r}
+
+# get the data subsets
+hake_tot <- hake4 %>% select(year, temp_100_anom, wgt_total_CA_US) %>% filter(is.na(temp_100_anom*wgt_total_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), wgt_total_CA_US_z = zfun(wgt_total_CA_US))
+
+#mean(hake_tot$wgt_total_CA_US) # 0.16
+
+hake_age5_20 <- hake4 %>% select(year, temp_100_anom, age5_20_CA_US) %>% filter(is.na(temp_100_anom*age5_20_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age5_20_CA_US_z = zfun(age5_20_CA_US))
+
+#View(hake_age5_20)
+#mean(hake_age5_20$age5_20_CA_US) # 0.29
+
+hake_age3_4 <- hake4 %>% select(year, temp_100_anom, age3_4_CA_US) %>% filter(is.na(temp_100_anom*age3_4_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age3_4_CA_US_z = zfun(age3_4_CA_US))
+
+#mean(hake_age3_4$age3_4_CA_US) # 0.10
+
+hake_age2 <- hake4 %>% select(year, temp_100_anom, age2_CA_US) %>% filter(is.na(temp_100_anom*age2_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age2_CA_US_z = zfun(age2_CA_US))
+
+#mean(hake_age2$age2_CA_US)# 0.01
+
+
+```
+
+# threshold detection steps
+
+note the functions used for these steps are in emp_functions.R
+
+## linearity check
+
+check for evidence of a nonlinear relationship between the driver (mean temperature anomaly at 100m) and the proportion of hake biomass in Canada for each of the hake age groups
+
+```{r}
+
+lin_test(dt = hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US")# gam better by 1.1
+
+lin_test(dt = hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US") # gam better by 1.1
+lin_test(dt = hake_age3_4, xvar = "temp_100_anom", yvar = "age3_4_CA_US") # exact same
+lin_test(dt = hake_age2, xvar = "temp_100_anom", yvar = "age2_CA_US") # exact same
+
+ 
+```
+
+## gam and deriv fitting
+
+calculate the GAM predictions and GAM derivatives for the full and jackknifed data sets for each hake age group
+
+```{r}
+
+length_val <- 50
+
+tot_fit <- all_fits(dt =hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US", xlength = length_val)
+
+age5_20_fit <- all_fits(dt =hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US", xlength = length_val)
+
+age3_4_fit <- all_fits(dt =hake_age3_4, xvar = "temp_100_anom", yvar = "age3_4_CA_US", xlength = length_val)
+
+age2_fit <- all_fits(dt =hake_age2, xvar = "temp_100_anom", yvar = "age2_CA_US", xlength = length_val)
+
+```
+
+
+## threshold calculations
+
+calculate the jackknifed threshold estimates for the total biomass and age 5-20 hake age groups
+
+```{r}
+tot_thresh <- thresh_calc(dt = hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US", xlength = length_val, all_results = tot_fit)
+
+age5_20_thresh <- thresh_calc(dt = hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US", xlength = length_val, all_results = age5_20_fit)
+
+#View(age5_20_thresh$jack_summ)
+
+#age5_20_thresh$tot_thresh
+#age5_20_thresh$jack_summ
+
+#age5_20_thresh$all_thresh
+
+#View(tot_thresh$jack_summ)
+
+```
+
+
+# plot fits
+
+get GAM and LM fits on the raw (not standardized scale) for plotting
+
+```{r}
+
+# driver values
+hake_x <- seq(from = min(hake4$temp_100_anom, na.rm = T), to = max(hake4$temp_100_anom, na.rm = T), length.out = 100) # by 0.01
+
+# gams fit on raw scale
+tot_hake.gm <- gam(wgt_total_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+
+age5_20_hake.gm <- gam(age5_20_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+
+# age 3-4 hake
+#age3_4_hake.lm <- lm(age3_4_CA_US ~ temp_100_anom, data = hake4)
+age3_4_hake.gm <- gam(age3_4_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+
+# age 2 hake
+#age2_hake.lm <- lm(age2_CA_US ~ temp_100_anom, data = hake4)
+age2_hake.gm <- gam(age2_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+
+gam_list <- list(tot = tot_hake.gm, age5_20 = age5_20_hake.gm, age3_4 = age3_4_hake.gm, age2 = age2_hake.gm)
+
+sub_names <- c("tot", "age5_20", "age3_4", "age2")
+
+# get the mean and simultaneous intervals of these gam's predictions
+for(i in 1:length(sub_names)){
+  
+  gam_pred <- gratia::fitted_values(gam_list[[i]], data = data.frame(temp_100_anom = hake_x))
+  
+  gam_df <- data.frame(
+    temp_100_anom = hake_x,
+    mn = gam_pred$fitted,
+    up = gam_pred$upper,
+    down = gam_pred$lower,
+    hake_sub = rep(sub_names[i], length(hake_x))
+  )
+  
+  if(i == 1){
+    pred_df <- gam_df
+  } else{
+    pred_df <- rbind(gam_df, pred_df)
+  }
+  
+}
+
+
+# get the linear model for the age 5-20 group
+age5_20_hake.lm <- gam(age5_20_CA_US~temp_100_anom,data = hake4)
+
+lm_pred <- stats::predict(age5_20_hake.lm, newdata = data.frame(temp_100_anom = hake_x), se.fit = TRUE)
+  
+  lm_df <- data.frame(
+    temp_100_anom = hake_x,
+    mn = lm_pred$fit,
+    up = lm_pred$fit + lm_pred$se.fit,
+    down = lm_pred$fit - lm_pred$se.fit,
+    mod = rep("lm", length(hake_x)),
+    hake_sub = rep(sub_names[i], length(hake_x))
+  )
+
+
+# get the threshold calculations
+# note for some reason, the data need to be data frames not tibbles, otherwise length(dd[,1]) is calculated as 1 not the actual length of the data
+hake_age5_20_sim <- hake_age5_20 %>% mutate(sim = 1, thresh_loc = NA, thresh_loc_z = NA)%>% rename(driver = temp_100_anom, obs_response =age5_20_CA_US)
+
+#pred_5_20 <- jack_results(simdt = as.data.frame(hake_age5_20_sim), sim_choice = c(1), x_pred = NA, xlength=50, z_scale = FALSE)
+
+thresh_5_20_summ <- jack_thresh(as.data.frame(hake_age5_20_sim), x_pred = NA, xlength = 50, z_scale = F)
+
+
+```
+
+## age 5-20
+
+plot the linear and gam model fits with the data for the age 5-20 group
+
+```{r}
+
+pdf("figurepdfs/hake_fits_520.pdf", height = 3.5)
+par(mfrow = c(1, 2))
+par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
+
+dt_sub <- pred_df[which(pred_df$hake_sub=="age5_20"),]
+
+plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2)) #, labels = NA
+axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), las = 1)
+#axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+mtext(side = 3, "GAM")
+mtext(side = 2, "Proportion biomass in Canada", line = 2.5)
+mtext(side = 1, "Mean 100m temperature anomaly between 45-49ºN", line = 1.5, outer = T)
+#mtext(side = 3, "Ages 5-20", line = -1.5)
+# add the extreme points
+for(i in 1:3){
+text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i]-0.01, y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.675)
+}
+abline(v = thresh_5_20_summ$thresh_mean[which(thresh_5_20_summ$thresh_method=="abs_max_d2"& thresh_5_20_summ$sig_type=="none")], col = "blue", lty = 2)
+
+dt_sub <- lm_df
+
+plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2)) #, labels = NA
+axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), labels = NA)
+mtext(side = 3, "Linear model")
+#axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+#mtext(side = 3, "Ages 5-20", line = -1.5)
+# add the extreme points
+for(i in 1:3){
+text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i] - 0.01, y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.675)
+}
+
+dev.off()
+
+# add threshold as a dashed arrow, in style of Samhouri and Large papers?
+
+
+```
+
+
+## all
+
+plot the GAM fits for all age groups
+
+```{r}
+
+# get thresholds on raw scale (need the mean and sd of the drivers and responses for the invzfun)
+
+ymin <- 0
+ymax <- max(hake4$wgt_total_CA_US) + 0.25
+
+lab_adj <- 0.04 # how high above points to put year label
+
+# xvalues used for calculating thresholds on standardized scale
+rangei <- max(hake_x, na.rm = T) - min(hake_x, na.rm = T)
+hake_xs <- seq(from = min(hake_x, na.rm = T), to = max(hake_x, na.rm = T), length.out =max(100, rangei*50))# make sure length is at least 100
+
+
+# plot results
+pdf("figurepdfs/hake_fits_all.pdf")
+par(mfrow = c(2, 2))
+par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
+# total
+dt_sub <- pred_df[which(pred_df$hake_sub=="tot"),]
+plot(x = hake_tot$temp_100_anom, y = hake_tot$wgt_total_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), xaxt = "n")
+axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2), labels = NA)
+mtext(side = 2, "Proportion biomass in Canada", line = 1.25, outer = T)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+mtext(side = 3, "Total hake biomass", line = -1.5)
+# add the extreme points
+for(i in 1:3){
+text(x = hake_tot$temp_100_anom[which(hake_tot$temp_100_anom>0.25)][i], y = hake_tot$wgt_total_CA_US[which(hake_tot$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_tot$year[which(hake_tot$temp_100_anom>0.25)][i]), cex =0.8)
+}
+
+# 5-20
+
+dt_sub <- pred_df[which(pred_df$hake_sub=="age5_20"),]
+
+plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2), labels = NA)
+axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), labels = NA)
+#axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+mtext(side = 3, "Ages 5-20", line = -1.5)
+# add the extreme points
+for(i in 1:3){
+text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i], y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.8)
+}
+
+# age 3-4
+dt_sub <- pred_df[which(pred_df$hake_sub=="age3_4"),]
+
+plot(x = hake_age3_4$temp_100_anom, y = hake_age3_4$age3_4_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax))#, yaxt = "n"
+#axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
+mtext(side = 3, "Ages 3-4", line = -1.5)
+mtext(side = 1, "Mean 100m temperature anomaly between 45-49ºN", line = 1.5, outer = T)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+
+for(i in 1:3){
+text(x = hake_age3_4$temp_100_anom[which(hake_age3_4$temp_100_anom>0.25)][i], y = hake_age3_4$age3_4_CA_US[which(hake_age3_4$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age3_4$year[which(hake_age3_4$temp_100_anom>0.25)][i]), cex =0.8)
+}
+
+# age 2
+dt_sub <- pred_df[which(pred_df$hake_sub=="age2"),]
+
+plot(x = hake_age2$temp_100_anom, y = hake_age2$age2_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), yaxt = "n")
+axis(side = 2, at = seq(0, 0.6, by = 0.2), labels = NA)
+mtext(side = 3, "Age 2", line = -1.5)
+#mtext(side = 1, "Mean 100m temp anomaly between 45-49ºN (standardized)", line = 0.5, outer = T)
+lines(x =hake_x, y = dt_sub$mn)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+
+for(i in 1:3){
+text(x = hake_age2$temp_100_anom[which(hake_age2$temp_100_anom>0.25)][i], y = hake_age2$age2_CA_US[which(hake_age2$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age2$year[which(hake_age2$temp_100_anom>0.25)][i]), cex =0.8)
+}
+
+dev.off()
+
+```
+
+
+# simulations
+
+simulate data that resembles the age 5-20 data set 
+
+## parameter choices
+
+
+```{r}
+
+#View(hake_age5_20)
+
+# first fit gam and lm on raw scale to get parameter values for the "true" driver-response relationship in the simulations
+gam_raw_5_20 <- gam(age5_20_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake_age5_20)
+lm_raw_5_20 <- lm(age5_20_CA_US~temp_100_anom,data = hake_age5_20)
+
+driver_hake <- seq(from = min(hake_age5_20$temp_100_anom), to = max(hake_age5_20$temp_100_anom), length.out = 100) # driver values
+
+gam_raw_5_20_fits <- gratia::fitted_values(gam_raw_5_20, data = data.frame(temp_100_anom = driver_hake))$fitted # GAM predictions
+
+lm_raw_5_20_fits <- stats::predict(lm_raw_5_20, newdata = data.frame(temp_100_anom = driver_hake), se.fit = F) # linear model predictions
+
+# get the threshold estimate on original scale
+#View(age5_20_thresh$jack_summ)
+thresh_est_5_20 <- invzfun(age5_20_thresh$jack_summ$thresh_mean[which(age5_20_thresh$jack_summ$thresh_method=="abs_max_d2" & age5_20_thresh$jack_summ$sig_type=="none")], hake_age5_20$temp_100_anom)
+
+# estimate the true driver-response relationship, assuming it is nonlinear and a hockeystick shape
+# get the mean of the flat (pre-threshold) part of the GAM prediction
+hs_1 <- mean(gam_raw_5_20_fits[which(driver_hake<=thresh_est_5_20)])
+
+# get the equation of the line (y = mx + b) for the second part (past the threshold)
+hs_2m <- (gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_1)/(driver_hake[length(driver_hake)]-max(driver_hake[which(driver_hake<=thresh_est_5_20)])) # slope
+hs_2b <- gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_2m*driver_hake[length(driver_hake)] # int
+
+# check this looks right
+plot(x = driver_hake, y = ifelse(driver_hake < thresh_est_5_20, hs_1, hs_2m*driver_hake + hs_2b), type = "l", ylim = c(0, 1))
+lines(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, type = "p")
+
+# can simulate data using this relationship using sim_emp_dat function
+# "hs_type" 1) increasing slope then flat or 2) decreasing slope then flat
+# so here use the flat then slope option
+# if flip==TRUE, change x to (-x + 2*thresh_loc) to flip it around the threshold location
+
+# get the parameters for the equation of the line: just use the slope and intercept from the linear model
+#lm_raw_5_20 # intercept = 0.29, slope = 0.16
+ln_b_5_20 <- unname(lm_raw_5_20$coefficients[1])
+ln_m_5_20 <- unname(lm_raw_5_20$coefficients[2])
+
+# check this looks right
+plot(x = driver_hake, y = ln_m_5_20*driver_hake + ln_b_5_20, type = "l", ylim = c(0, 1))
+lines(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, type = "p")
+
+# get the noise in the y values: approximate based on standard deviation of the residuals of the GAM and linear model fits
+sd(residuals(lm_raw_5_20)) # 0.152
+sd(residuals(gam_raw_5_20)) # 0.134
+
+obs_sd_5_20 <- 0.14 # choose 0.14
+
+# get the characteristics of the driver data
+#hist(hake_age5_20$temp_100_anom, n = 8)
+
+# assume driver has normal distribution
+x_sd1 <- sd(hake_age5_20$temp_100_anom)
+x_mean1 <- mean(hake_age5_20$temp_100_anom)
+
+# temporal autocorrelation
+#acf(hake_age5_20$temp_100_anom) # doesn't seem to be an issue
+
+# threshold quantile
+# get the quantile of the threshold value: need to find which value of the threshold quantile would correspond to a value of the mean of the driver's distribution that is approximately equal to the observed mean (assuming driver has a normal distribution)
+quant_vals <- seq(from = 0.001, to = 0.999, by = 0.001) # quantile values to check
+quant_test <- rep(NA, length(quant_vals)) # holding vector for corresponding driver values
+
+for(i in 1: length(quant_test)){
+  
+  quant_test[i] <- qnorm(quant_vals[i], mean = 0, sd = x_sd1) # driver value corresponding to the ith quantile of a normal distribution with a mean of 0 and as sd equal to the observed sd value
+}
+
+# figure out which of the x values in quant_test is closest to the true threshold quantile value 
+# for true threshold quantile, x_mean = thresh_true - qnorm(thresh_quant), which means x_mean - (thresh_true - qnorm(thresh_quant)) = 0, so want to find the value of quant_test that minimizes this expression
+which(abs(x_mean1-(thresh_est_5_20-quant_test))==min(abs(x_mean1-(thresh_est_5_20-quant_test)))) # 754
+
+quant_vals[754] # 0.754
+
+thresh_quant1 <- 0.754 # threshold quantile is approximately 0.754 (i.e., about 75% of observations fall below the threshold value)
+
+# check want thresh_loc - qnorm(thresh_quant, mean = 0, sd = x_sd1) is close to the observed mean
+thresh_est_5_20 - qnorm(thresh_quant1, mean = 0, sd = x_sd1)
+x_mean1
+
+```
+
+
+put all the parameters together and check that the resulting simulated data sets look reasonable
+```{r}
+
+# driver parameters
+driver_pars_5_20 = list(x_min = NULL, x_max = NULL, thresh_quant = thresh_quant1, x_df = 10, x_sd = x_sd1, x_dist = "normal") 
+
+
+# parameters for driver-response relationship
+control_pars_5_20 <-  list(thresh_loc = thresh_est_5_20, thresh_loc_sd = 0, y_max = gam_raw_5_20_fits[length(gam_raw_5_20_fits)], y_min = hs_1, min_x =-driver_hake[length(driver_hake)]+2*thresh_est_5_20, hs_type = 2, hs_a = NULL, flip_y = TRUE, skew_cv = 1, skew_conc = "up", sig_k = 1.5, lin_m = ln_m_5_20, lin_b = ln_b_5_20)
+
+# simulate a single test data set
+sim_dt_5_20 <- sim_emp_data(nsim = 1, tmax = 13, fun = "hockeystick", control_pars = control_pars_5_20, driver_pars = driver_pars_5_20, obs_sd = obs_sd_5_20) 
+
+# compare to actual data set
+#mean(hake_age5_20$temp_100_anom)
+#sd(hake_age5_20$temp_100_anom)
+#mean(sim_dt_5_20$driver)
+#sd(sim_dt_5_20$driver)
+
+#hist(sim_dt_5_20$driver)
+#abline(v = thresh_est_5_20 - qnorm(driver_pars_5_20$thresh_quant, mean = 0, sd = x_sd1))
+
+# see what the simulated data look like
+plot(x = driver_hake, y = gam_raw_5_20_fits, type = "l", xlab = "driver", ylab = "response", xlim = c(min(sim_dt_5_20$driver), max(sim_dt_5_20$driver)), ylim = c(min(sim_dt_5_20$obs_response), max(sim_dt_5_20$obs_response)))
+lines(x = driver_hake, y = lm_raw_5_20_fits, lty = 2)
+abline(v = thresh_est_5_20)
+#abline(h = hs_1, col = "blue")
+#abline(a = hs_2b, b = hs_2m, col = "blue")
+lines(x = sim_dt_5_20$driver[order(sim_dt_5_20$driver)], y = sim_dt_5_20$response[order(sim_dt_5_20$driver)], type = "l", col = "blue")
+lines(x = sim_dt_5_20$driver, y = sim_dt_5_20$obs_response, type = "p", pch = 16)
+
+#plot(x = sim_dt_5_20$driver, y = sim_dt_5_20$obs_response, type = "p")
+#abline(v = thresh_est_5_20)
+
+#length(which(sim_dt_5_20$driver>thresh_est_5_20))/length(sim_dt_5_20$driver)
+
+
+# look at means more closely to make sure the threshold quantile choice is working
+# simulate 100 data sets and get the mean value of the driver in each for each of them
+sim_dt_test <- sim_emp_data(nsim = 100, tmax = 20, fun = "hockeystick", control_pars = control_pars_5_20, driver_pars = driver_pars_5_20, obs_sd = obs_sd_5_20) 
+
+sim_dt_test <- sim_dt_test %>% group_by(sim) %>% summarize(mean_driver = mean(driver))
+
+hist(sim_dt_test$mean_driver)
+abline(v = thresh_est_5_20 - qnorm(driver_pars_5_20$thresh_quant, mean = 0, sd = x_sd1))
+
+# simulate a single data set with a time series length of 1000
+sim_dt_test <- sim_emp_data(nsim = 1, tmax = 1000, fun = "hockeystick", control_pars = control_pars_5_20, driver_pars = driver_pars_5_20, obs_sd = obs_sd_5_20) 
+
+hist(sim_dt_test$driver)
+
+```
+
+
+
+```{r}
+# check how often there are values less than 0 or greater than 1 (since the true response is a proportion and should therefore be between 0 and 1)
+sim_dt_test2 <- sim_emp_data(nsim = 100, tmax = 50, fun = "hockeystick", control_pars = control_pars_5_20, driver_pars = driver_pars_5_20, obs_sd = obs_sd_5_20) 
+
+length(which(sim_dt_test2$obs_response > 1))/length(sim_dt_test2$sim)*100
+length(which(sim_dt_test2$obs_response < 0))/length(sim_dt_test2$sim)*100
+
+sim_dt_test3 <- sim_emp_data(nsim = 100, tmax = 50, fun = "linear", control_pars = control_pars_5_20, driver_pars = driver_pars_5_20, obs_sd = obs_sd_5_20) 
+
+length(which(sim_dt_test3$obs_response > 1))/length(sim_dt_test2$sim)*100
+length(which(sim_dt_test3$obs_response < 0))/length(sim_dt_test2$sim)*100
+
+```
+
+## run simulations
+
+Look at the effect of time series length and observation error on threshold detectability. Simulations take about 85 min for 100 replicates 
+
+```{r}
+# parmat_h
+nsim1 <- 100 # 100 replicate data sets
+
+# driver values for generating predictions (on standardized scale)
+xvals1 <- seq(from = -3, to = 3, by = 0.01)
+
+
+obs_set_h <- c(obs_sd_5_20, 0.1*obs_sd_5_20)# sd's of observation error
+ts_set_h <- seq(from = 13, to = 41, by = 4) # time series lengths
+quant_set_h <- c(thresh_quant1) 
+cov_sd_set_h <- c(0) # no covariate effects
+
+# get all the parameter combinations together
+parmat_h1 <- unname(as.matrix(expand.grid(obs_set_h, ts_set_h, quant_set_h[1], cov_sd_set_h[1])))
+
+parmat_h <- unique(parmat_h1) # make sure only unique combinations are used
+#parmat_h
+
+```
+
+
+
+### hockeystick
+
+simulations where true driver-response relationship is a hockeystick shape based on the GAM fit to the empirical age 5-20 data set
+
+```{r}
+# hockeystick simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat_h[p, 3], x_df = 10, x_sd = x_sd1, x_dist = "normal")
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat_h[p, 4], cov_int = NA)
+  
+  dt_p <- sim_emp_data(nsim = nsim1, tmax = parmat_h[p, 2], driver_pars = driver_pars_p, obs_sd = parmat_h[p, 1], fun = "hockeystick", control_pars = control_pars_5_20, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # un-comment the two lines below to restrict simulated response variables to be between 0 and 1
+  #dt_p$obs_response <- ifelse(dt_p$obs_response > 1, 1, ifelse(dt_p$obs_response < 0, 0, dt_p$obs_response))
+  #dt_p$response <- ifelse(dt_p$response > 1, 1, ifelse(dt_p$response < 0, 0, dt_p$response))
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p, thresh_methods = c("abs_max_d2"))
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat_h[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat_h[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat_h[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat_h[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1, thresh_methods = c("abs_max_d2"))
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat_h[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat_h[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat_h[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat_h[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+hs_jdf <- jdf
+hs_jdf$shape <- rep("hockeystick", length(hs_jdf$sim))
+hs_jdf$best_mod <- lndf$best_mod
+hs_jdf$aic_diff <- lndf$aic_diff
+
+#View(hs_jdf)
+
+```
+
+
+### linear 
+
+simulations where true driver-response relationship is a linear function based on the linear regression fit to the empirical age 5-20 data set
+
+```{r}
+
+# linear simulations
+
+# first simulate the data and save as a list
+dt_list <- vector(mode = "list")
+
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat_h[p, 3], x_df = 10, x_sd = x_sd1, x_dist = "normal")
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat_h[p, 4], cov_int = NA)
+  
+  dt_p <- sim_emp_data(nsim = nsim1, tmax = parmat_h[p, 2], driver_pars = driver_pars_p, obs_sd = parmat_h[p, 1], fun = "linear", control_pars = control_pars_5_20, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  # un-comment the two lines below to restrict simulated response variables to be between 0 and 1
+  #dt_p$obs_response <- ifelse(dt_p$obs_response > 1, 1, ifelse(dt_p$obs_response < 0, 0, dt_p$obs_response))
+  #dt_p$response <- ifelse(dt_p$response > 1, 1, ifelse(dt_p$response < 0, 0, dt_p$response))
+  
+  dt_list[[p]] <- dt_p
+  
+}
+tictoc::toc()
+
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the linearity test
+  ln_p <- lin_check(dt_p, thresh_methods = c("abs_max_d2")) 
+  
+  # add the parameter columns
+  ln_p$obs_error <- rep(parmat_h[p, 1], length(ln_p$sim))
+  ln_p$ts_length <- rep(parmat_h[p, 2], length(ln_p$sim))
+  ln_p$thresh_quant <- rep(parmat_h[p, 3], length(ln_p$sim))
+  ln_p$cov_sd <- rep(parmat_h[p, 4], length(ln_p$sim))
+  
+  # save the data frame
+  if(p == 1){
+    lndf <- ln_p
+  } else {
+    lndf <- rbind(ln_p, lndf)
+  }
+  
+  
+}
+tictoc::toc()
+
+# do the jackknifing
+tictoc::tic()
+for(p in 1:length(parmat_h[,1])){ 
+  # get the simulated data
+  dt_p <- dt_list[[p]]
+  
+  # do the jackknifing
+  thresh_pj <- jack_thresh(dt_p, xvals1, thresh_methods = c("abs_max_d2"))
+  
+  # add the parameter columns
+  thresh_pj$obs_error <- rep(parmat_h[p, 1], length(thresh_pj$sim))
+  thresh_pj$ts_length <- rep(parmat_h[p, 2], length(thresh_pj$sim))
+  thresh_pj$thresh_quant <- rep(parmat_h[p, 3], length(thresh_pj$sim))
+  thresh_pj$cov_sd <- rep(parmat_h[p, 4], length(thresh_pj$sim))
+  
+  # save the data frame
+  if(p == 1){
+    jdf <- thresh_pj
+  } else {
+    jdf <- rbind(thresh_pj, jdf)
+  }
+  
+  
+}
+
+
+tictoc::toc()
+
+ln_jdf <- jdf
+ln_jdf$shape <- rep("linear", length(ln_jdf$sim))
+ln_jdf$best_mod <- lndf$best_mod
+ln_jdf$aic_diff <- lndf$aic_diff
+
+```
+
+
+### save results
+
+```{r}
+hake_sim_df <- rbind(hs_jdf, ln_jdf)
+
+write.csv(hake_sim_df, "simulation outputs/hake_sim2.csv")
+
+```
+
+
+## plot results
+
+### hake fits vs. sims
+
+plot the GAM and linear regression fits to the age 5-20 hake data and overlay the approximate linear and nonlinear "true" driver-response relationships used in the above simulations
+
+```{r}
+
+pdf("figurepdfs/hake_sim_relationships.pdf", height = 4)
+par(mfrow = c(1, 2))
+par(mar=c(2, 0.5, 1, 0.5), oma = c(2, 3, 1, 0.5))
+plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, ylab = NA, las = 1, pch = 16)
+lines(x = driver_hake, y = ifelse(driver_hake < thresh_est_5_20, hs_1, hs_2m*driver_hake + hs_2b), type = "l", lty = 2, lwd = 2)
+lines(x = driver_hake, y = gam_raw_5_20_fits, type = "l")
+#abline(v = thresh_est_5_20, col = "blue")
+mtext(side = 1, "Mean 100m temp anomaly between 45-49ºN", line = 2.5, adj = -3.15)
+mtext(side = 2, "Prop. age 5-20 hake biomass in CA", line = 2.5)
+mtext(side = 3, "Nonlinear relationship")
+legend(x = -0.5, y= 0.62, c("statistical fit", "simulated \nrelationship"), lwd = c(1, 2), lty = c(1, 2), bty = "n", cex = 0.8)
+
+plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, ylab = NA, las = 1, yaxt = "n", pch = 16)
+axis(side = 2, at = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6), labels = NA)
+lines(x = driver_hake, y = ln_m_5_20*driver_hake + ln_b_5_20, type = "l", lty = 2, lwd = 2)
+lines(x = driver_hake, y = lm_raw_5_20_fits, type = "l")
+#mtext(side = 1, "Mean 100m temp anomaly between 45-49ºN", line = 2.5)
+mtext(side = 3, "Linear relationship")
+
+dev.off()
+
+
+```
+
+### ROC, 100 reps
+
+make reciever-operator curve plot using all 100 replicate data sets for each parameter combination
+
+
+prep the data to plot:
+```{r}
+# ROC plots
+
+# strict detection criteria
+
+min_frac <- 0.95 # min fraction of jackknife iterations that need to have detected a threshold for a positive detection
+
+# sig_type = sim_int (simultaneous interval significance criteria)
+data_sub <- hake_sim_df %>% filter(sig_type=="sim_int")%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0))
+
+#View(data_sub)
+
+# false positives
+fpr_df <- data_sub %>% filter(shape=="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(FPR = sum(n_sims)/100) #/100 because 100 replicate simulations
+
+# true positives
+tpr_df <- data_sub %>% filter(shape !="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(shape, thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(TPR = sum(n_sims)/100)
+
+#View(tpr_df)
+
+# join together
+roc_df_strict <- left_join(tpr_df, fpr_df, by = c("thresh_method", "obs_error", "ts_length", "thresh_quant", "cov_sd")) %>% mutate(sig_criteria = "strict")
+
+#View(roc_df_strict)
+
+
+# repeat for weak detection criteria
+min_frac <- 0.25# min fraction of jackknife iterations that need to have detected a threshold for a positive detection
+
+# sig_type = "none" (no significance criteria)
+data_sub <- hake_sim_df %>% filter(sig_type=="none")%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0))
+
+#View(data_sub)
+
+fpr_df <- data_sub %>% filter(shape=="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(FPR = sum(n_sims)/100)
+
+#View(fpr_df)
+
+tpr_df <- data_sub %>% filter(shape !="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(shape, thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(TPR = sum(n_sims)/100)
+
+#View(tpr_df)
+
+roc_df_weak <- left_join(tpr_df, fpr_df, by = c("thresh_method", "obs_error", "ts_length", "thresh_quant", "cov_sd")) %>% mutate(sig_criteria = "weak")
+
+#View(roc_df_weak)
+
+# join the weak and strict detection cases together
+roc_df <- rbind(roc_df_strict, roc_df_weak)
+
+#head(data_sub)
+
+```
+
+
+make the plot:
+```{r}
+
+pt_cols <- c("blue", "cadetblue") # colors for low vs. high obs error
+pt_pch <- c(0, 1, 2, 5, 6, 15, 16, 17) # point types from shortest to longest ts
+
+
+
+pdf("figurepdfs/hake_sim_ROC.pdf", width = 7, height = 3.5)
+layout(matrix(c(1,2), 1, 2))
+par(mar=c(0, 1, 0.5, 0), oma = c(3, 3, 1, 0.5))
+
+plot_df <- roc_df[which(roc_df$sig_criteria=="weak"),] 
+dt_sub <- plot_df %>% arrange(obs_error, ts_length)
+
+plot(x = 0, y = 0, ylim = c(0, 1), xlim = c(0, 1), type = "n", las = 1, xlab = NA, ylab = NA, xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = 0, to = 1, by = 0.2))
+axis(side = 2, at = seq(from = 0, to = 1, by = 0.2), las = 1)
+mtext(side = 3, "Weak detection requirements")
+mtext(side = 2, "True positive rate", line = 2.5)
+mtext(side = 1, "False positive rate", line = 2)
+#mtext(side = 3, "Linear covariate", line = 0)
+abline(a = 0, b = 1, lty = 2)
+for(i in 1:length(obs_set_h)){
+  
+for(j in 1:length(ts_set_h)){
+  
+ # print(paste(pt_cols[i], pt_pch[j], sep = ","))
+points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+}  
+}
+# put circle around current conditions
+points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
+
+# legend background
+legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
+legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+
+
+plot_df <- roc_df[which(roc_df$sig_criteria=="strict"),] 
+dt_sub <- plot_df %>% arrange(obs_error, ts_length)
+
+plot(x = 0, y = 0, ylim = c(0, 1), xlim = c(0, 1), type = "n", las = 1, xlab = NA, ylab = NA, xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = 0, to = 1, by = 0.2))
+axis(side = 2, at = seq(from = 0, to = 1, by = 0.2), labels = NA)
+mtext(side = 3, "Strict detection requirements")
+#mtext(side = 2, "True positive rate", line = 2.5)
+mtext(side = 1, "False positive rate", line = 2)
+#mtext(side = 3, "Linear covariate", line = 0)
+abline(a = 0, b = 1, lty = 2)
+for(i in 1:length(obs_set_h)){
+  
+for(j in 1:length(ts_set_h)){
+  
+ # print(paste(pt_cols[i], pt_pch[j], sep = ","))
+points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+}  
+}
+
+# put circle around current conditions
+points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
+
+dev.off()
+
+
+```
+
+### ROC, 50 reps
+
+repeat the above but only using the first 50 simulation replicates (to see whether patterns changed a lot between 50 and 100 reps, which would suggest 100 replicates might not be sufficient)
+
+```{r}
+
+# strict detection criteria
+
+min_frac <- 0.95
+
+# with >2 requirement
+data_sub <- hake_sim_df %>% filter(sim <=50) %>% filter(sig_type=="sim_int")%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0))
+
+#View(data_sub)
+
+fpr_df <- data_sub %>% filter(shape=="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(FPR = sum(n_sims)/50)
+
+#View(fpr_df)
+
+tpr_df <- data_sub %>% filter(shape !="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(shape, thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(TPR = sum(n_sims)/50)
+
+#View(tpr_df)
+
+roc_df_strict <- left_join(tpr_df, fpr_df, by = c("thresh_method", "obs_error", "ts_length", "thresh_quant", "cov_sd")) %>% mutate(sig_criteria = "strict")
+
+#View(roc_df_strict)
+
+
+# weak detection criteria
+min_frac <- 0.25
+data_sub <- hake_sim_df %>% filter(sim <=50) %>% filter(sig_type=="none")%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0))
+
+#View(data_sub)
+
+fpr_df <- data_sub %>% filter(shape=="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(FPR = sum(n_sims)/50)
+
+#View(fpr_df)
+
+tpr_df <- data_sub %>% filter(shape !="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% group_by(shape, thresh_method, obs_error, ts_length, thresh_quant, cov_sd) %>% summarize(TPR = sum(n_sims)/50)
+
+#View(tpr_df)
+
+roc_df_weak <- left_join(tpr_df, fpr_df, by = c("thresh_method", "obs_error", "ts_length", "thresh_quant", "cov_sd")) %>% mutate(sig_criteria = "weak")
+
+roc_df <- rbind(roc_df_strict, roc_df_weak)
+
+#head(data_sub)
+
+```
+
+
+```{r}
+
+pt_cols <- c("blue", "cadetblue") # colors for low and high obs error
+pt_pch <- c(0, 1, 2, 5, 6, 15, 16, 17) # point types from shortest to longest ts
+
+
+pdf("figurepdfs/hake_sim_ROC_50.pdf", width = 7, height = 3.5)
+layout(matrix(c(1,2), 1, 2))
+par(mar=c(0, 1, 0.5, 0), oma = c(3, 3, 1, 0.5))
+
+plot_df <- roc_df[which(roc_df$sig_criteria=="weak"),] 
+dt_sub <- plot_df %>% arrange(obs_error, ts_length)
+
+plot(x = 0, y = 0, ylim = c(0, 1), xlim = c(0, 1), type = "n", las = 1, xlab = NA, ylab = NA, xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = 0, to = 1, by = 0.2))
+axis(side = 2, at = seq(from = 0, to = 1, by = 0.2), las = 1)
+mtext(side = 3, "Weak detection requirements")
+mtext(side = 2, "True positive rate", line = 2.5)
+mtext(side = 1, "False positive rate", line = 2)
+#mtext(side = 3, "Linear covariate", line = 0)
+abline(a = 0, b = 1, lty = 2)
+for(i in 1:length(obs_set_h)){
+  
+for(j in 1:length(ts_set_h)){
+  
+ # print(paste(pt_cols[i], pt_pch[j], sep = ","))
+points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+}  
+}
+
+# put circle around current conditions
+points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
+# legend background
+legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
+legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+
+
+plot_df <- roc_df[which(roc_df$sig_criteria=="strict"),] 
+dt_sub <- plot_df %>% arrange(obs_error, ts_length)
+
+plot(x = 0, y = 0, ylim = c(0, 1), xlim = c(0, 1), type = "n", las = 1, xlab = NA, ylab = NA, xaxt = "n", yaxt = "n")
+axis(side = 1, at = seq(from = 0, to = 1, by = 0.2))
+axis(side = 2, at = seq(from = 0, to = 1, by = 0.2), labels = NA)
+mtext(side = 3, "Strict detection requirements")
+#mtext(side = 2, "True positive rate", line = 2.5)
+mtext(side = 1, "False positive rate", line = 2)
+#mtext(side = 3, "Linear covariate", line = 0)
+abline(a = 0, b = 1, lty = 2)
+for(i in 1:length(obs_set_h)){
+  
+for(j in 1:length(ts_set_h)){
+  
+ # print(paste(pt_cols[i], pt_pch[j], sep = ","))
+points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+}  
+}
+
+# put circle around current conditions
+points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
+
+dev.off()
+
+
+```
+
+
+### boxplot, 100 reps
+
+plot boxplot showing the difference between the true and estimated threshold location for the different parameter combinations simulated
+
+```{r}
+
+
+boxpos <- c(1:2, 5:6, 9:10, 13:14, 17:18, 21:22, 25:26, 29:30)# positions of the boxes
+
+jt_amount <- 0.1 # amount to jitter points in boxplots
+
+n_adj <- 0.15 # how far from top of box to adjust sample sizes
+n_size <- 0.75 # font size of sample sizes
+
+max_adj <- 0.25 # adjust ymax 
+min_adj <- 0.2 # adjust ymin
+
+xlab_cex <- 0.8 # size to make x axis labels
+col_cex <- 1.2 # font for column labels
+
+
+# start with weak detection criteria
+sig_choice <- "none" # significance criteria for which to plot results
+
+sig_thresh <- 0.25 # minimum fraction of jackknife iterations that need to detected a threshold for that simulation to count as having found a threshold
+
+# subset the data
+plot_dt <- hake_sim_df%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0)) %>% filter(shape=="hockeystick") %>% filter(best_mod %in% c("gam")) %>% filter(thresh_n_full %in% c(1, NA)) %>% filter(sig_type==sig_choice) %>% filter(thresh_fraction >= sig_thresh)%>% filter(thresh_method=="abs_max_d2")
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(obs_error, ts_length, cov_sd, thresh_quant) %>% mutate(na_check = mean(thresh_diff, na.rm = T)) %>% ungroup()
+
+plot_dt$obs_error <- as.character(plot_dt$obs_error) # not sure why but the obs_error = 0.014 weren't subsetting without making it a character
+
+ymin <- min(plot_dt$thresh_diff, na.rm = T)-min_adj 
+ymax <- max(plot_dt$thresh_diff, na.rm = T)+max_adj 
+yaxt_at <- round(seq(from = ymin, to = ymax, by = 1), 0)# where to put y axis labels
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+levels <- matrix(NA, nrow = 16, ncol = 2) # levels for jittering points
+levels[, 1] <- rep(as.character(rev(obs_set_h)), length(ts_set_h)) # need to reverse obs_set_h so order matches the order in boxplot (since obs_set_h[1] > obs_set_h[2])
+levels[,2] <- rep(as.character(ts_set_h), each = length(obs_set_h))
+
+datasub <- plot_dt
+#View(datasub)
+
+pdf("figurepdfs/hake_sim_bxpt.pdf", width = 7, height = 6)# height = 3
+layout(matrix(c(1,2), 2, 1))
+par(mar=c(0, 1.5, 1.5, 0), oma = c(2.5, 2, 0, 0.5))
+
+boxplot(thresh_diff ~ as.character(obs_error) + as.character(ts_length), data = datasub,
+        at = boxpos, col = c(adjustcolor("cadetblue", alpha.f = 0.3), adjustcolor("blue", alpha.f = 0)), border = c("cadetblue", "blue"), outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, yaxt = "n", ylim = c(ymin, ymax))
+axis(side = 2, at = yaxt_at, las = 1)
+axis(side = 1, at = c(1.5, 5.5, 9.5, 13.5, 17.5, 21.5, 25.5, 29.5), labels = NA, tick = F, line = -1)
+mtext(side = 2, "Bias (mean estimate - true threshold)", line = 2, adj = 5) 
+mtext(side = 3, "Weak detection requirements")
+abline(h = 0, lty = 2)
+#legend("bottomright", legend = c("obs_sd = 0.014", "obs_sd = 0.14"), pch = c(16, 1), col = c("cadetblue", "blue"), ncol = 2)
+#text(x = 6.4, y = 2.8, "risk-averse \nside")
+#text(x = 6.4, y = -2.5, "risk-prone \nside")
+
+# add the data points
+for(i in 1:nrow(levels)){
+
+  yvals <- datasub$thresh_diff[which(datasub$obs_error==as.numeric(levels[i,1]) & datasub$ts_length==as.numeric(levels[i, 2]))] 
+  jtx <- jitter(rep(boxpos[i], length(yvals)), amount = jt_amount)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=ifelse(levels[i, 1]=="0.014", 16, 1), col=ifelse(levels[i, 1]=="0.014", adjustcolor("cadetblue", alpha.f = 0.3), adjustcolor("blue", alpha.f = 0.4)))
+}
+# adding sample sizes
+n_group <- datasub %>% group_by(obs_error, ts_length) %>% summarize(n = length(which(is.na(thresh_diff)==F))) %>% arrange(ts_length, obs_error) 
+boxbnds <- boxplot(thresh_diff ~ as.character(obs_error) + as.character(ts_length), data = datasub,at = boxpos, plot = F)$stats 
+text(x = boxpos, y = boxbnds[nrow(boxbnds), ] + n_adj, as.character(n_group$n), cex = n_size)
+
+# repeat for strict detection criteria
+sig_choice <- "sim_int" # significance criteria for which to plot results
+
+sig_thresh <- 0.95 # minimum fraction of jackknife iterations that need to detected a threshold for that simulation to count as having found a threshold
+
+plot_dt <- hake_sim_df%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0)) %>% filter(shape=="hockeystick") %>% filter(best_mod %in% c("gam")) %>% filter(thresh_n_full %in% c(1, NA)) %>% filter(sig_type==sig_choice) %>% filter(thresh_fraction >= sig_thresh)%>% filter(thresh_method=="abs_max_d2")
+
+# need to make dummy points for cases where results for all simulations were NA in order to keep the placeholder for the boxplot
+plot_dt <- plot_dt %>% group_by(obs_error, ts_length, cov_sd, thresh_quant) %>% mutate(na_check = mean(thresh_diff, na.rm = T)) %>% ungroup()
+
+ymin <- min(plot_dt$thresh_diff, na.rm = T)-min_adj 
+ymax <- max(plot_dt$thresh_diff, na.rm = T)+max_adj 
+#yaxt_at <- c(-2, -1, 0, 1, 2)# where to put y axis labels
+yaxt_at <- round(seq(from = ymin, to = ymax, by = 1), 0)# where to put y axis labels
+ylabs <- seq(from = ymin, to = ymax, by = 1)
+
+plot_dt$obs_error <- as.character(plot_dt$obs_error) # not sure why but the obs_error = 0.014 weren't subsetting without this
+
+datasub <- plot_dt
+
+boxplot(thresh_diff ~ as.character(obs_error) + as.character(ts_length), data = datasub,
+        at = boxpos, col = c(adjustcolor("cadetblue", alpha.f = 0.3), adjustcolor("blue", alpha.f = 0)), border = c("cadetblue", "blue"), outline = F, names = NA, xaxt = "n", las = 1, xlab = NA, ylab = NA, yaxt = "n", ylim = c(ymin, ymax))
+axis(side = 2, at = yaxt_at, las = 1)
+axis(side = 1, at = c(1.5, 5.5, 9.5, 13.5, 17.5, 21.5, 25.5, 29.5), labels = as.character(ts_set_h), tick = F, line = -1)
+mtext(side = 1, "Time series length (years)", line = 1.2)#, cex = xlab_cex
+mtext(side = 3, "Strict detection requirements")
+abline(h = 0, lty = 2)
+legend("bottomright", legend = c("obs_sd = 0.014", "obs_sd = 0.14"), pch = c(16, 1), col = c("cadetblue", "blue"), ncol = 2)
+
+for(i in 1:nrow(levels)){
+  yvals <- datasub$thresh_diff[which(datasub$obs_error==as.numeric(levels[i,1]) & datasub$ts_length==as.numeric(levels[i, 2]))] 
+  jtx <- jitter(rep(boxpos[i], length(yvals)), amount = jt_amount)# add jitter to x-axis indices proportional number in each level
+  points(jtx, yvals, pch=ifelse(levels[i, 1]=="0.014", 16, 1), col=ifelse(levels[i, 1]=="0.014", adjustcolor("cadetblue", alpha.f = 0.3), adjustcolor("blue", alpha.f = 0.4)))
+}
+# adding sample sizes
+n_group <- datasub %>% group_by(obs_error, ts_length) %>% summarize(n = length(which(is.na(thresh_diff)==F))) %>% arrange(ts_length, obs_error) 
+boxbnds <- boxplot(thresh_diff ~ as.character(obs_error) + as.character(ts_length), data = datasub,at = boxpos, plot = F)$stats 
+text(x = boxpos, y = boxbnds[nrow(boxbnds), ] + n_adj, as.character(n_group$n), cex = n_size)
+
+
+dev.off()
+
+
+
+
+```
+
+
+
+### FPR check
+
+look more closely at the relatively small/inconsistent effects of observation error and time series lengths on FPRs
+
+look at a simulation replicate that had an FPR when time series length = 41 and where it stayed an FPR with low obs error
+
+
+```{r}
+
+min_frac <- 0.25
+
+fpr_check <- hake_sim_df %>% filter(sig_type=="none")%>% mutate(thresh_n = if_else(best_mod %in% c("lm", "lm_ns", "gam_ns"), 0, thresh_n))%>% mutate(thresh_fraction = thresh_n/ts_length) %>% mutate(thresh_fraction = if_else(thresh_n_full %in% c(NA, 1), thresh_fraction, 0)) %>% filter(shape=="linear") %>% mutate(n_sims = if_else(thresh_fraction >= min_frac, 1, 0)) %>% filter(n_sims==1) %>% filter(ts_length ==41)
+
+
+#View(fpr_check)
+
+
+```
+
+
+```{r}
+
+
+# simulate the data
+dt_list <- vector(mode = "list")
+
+for(p in 1:length(parmat_h[,1])){ 
+  
+  driver_pars_p = list(x_min = NULL, x_max = NULL, thresh_quant = parmat_h[p, 3], x_df = 10, x_sd = x_sd1, x_dist = "normal")
+  
+  cov_pars_p <- list(inc_cov = TRUE, beta_mean = 1, beta_sd = 0, beta_sign = 1, cov_mean = 0, cov_sd = parmat_h[p, 4], cov_int = NA)
+  
+  dt_p <- sim_emp_data(nsim = nsim1, tmax = parmat_h[p, 2], driver_pars = driver_pars_p, obs_sd = parmat_h[p, 1], fun = "linear", control_pars = control_pars_5_20, cov_pars = cov_pars_p) # CHANGE fun and control_pars for each driver-response relationship
+  
+  dt_list[[p]] <- dt_p
+  
+}
+
+#parmat_h
+
+par_choice <- 15 # row of parmat with high obs error, ts length = 41
+dt_high <- dt_list[[par_choice]]
+
+par_choice <- 16 # row of parmat with low obs error, ts lenth = 41
+dt_low <- dt_list[[par_choice]]
+
+sim_xp <- 10 # simulation replicate to look at
+#View(dt_high)
+
+dt_high <- dt_high[which(dt_high$sim==sim_xp),]
+dt_high$sim <- dt_high$sim/sim_xp # change sim to 1
+
+dt_low <- dt_low[which(dt_low$sim==sim_xp),] 
+dt_low$sim <- dt_low$sim/sim_xp
+
+# check model selection
+lin_check(dt_high, thresh_methods = c("abs_max_d2"), sig_criteria = "none")
+lin_check(dt_low, thresh_methods = c("abs_max_d2"), sig_criteria = "none")
+
+# plot the data
+plot(x = dt_high$driver, y = dt_high$obs_response)
+
+plot(x = dt_low$driver, y = dt_low$obs_response)
+
+
+```
+
+
+```{r}
+
+# look at the model fits
+
+mar1 <- c(0.2, 2.5, 2.5, 0.25)
+mar2 <- c(2.5, 2.5, 0.2, 0.25)
+
+pdf("figurepdfs/hake_FPR_check.pdf", width = 5, height = 5)
+par(mfrow = c(2, 2))
+layout(matrix(c(1, 2, 3, 4), 2, 2))
+par(oma = c(1.25, 1, 0.1, 0.1))
+# low sd
+xy_lm <- lm(obs_response~driver, data = dt_low)
+#summary(xy_lm) # b = 0.284137, m = 0.174295
+
+xy_gm <- gam(obs_response~s(driver,k=4,bs="tp"), data = dt_low)
+#pred_full <- gratia::fitted_values(gam_full, data = xdt)
+pred_gm <- gratia::fitted_values(xy_gm)$fitted
+
+d2_gam <- gratia::derivatives(xy_gm, data = data.frame(driver = seq(from = -1, to = 1, length.out = 100)), order = 2, eps = 5*10^-6)$derivative
+
+par(mar = mar1)
+plot(x = dt_low$driver, y = dt_low$obs_response, las = 1, xlab = NA, ylab = NA, xaxt = "n", xlim = c(min(dt_low$driver), max(dt_low$driver)))
+#mtext(side = 1, "driver", line = 2.5)
+mtext(side = 2, "response", line = 2.5)
+mtext(side = 3, "low obs_sd")
+lines(x = dt_low$driver[order(dt_low$driver)], y = pred_gm[order(dt_low$driver)])
+#abline(v = invzfun(-1.000833333, dt_low$driver), col = "cadetblue", lwd = 2)
+abline(a = xy_lm$coefficients[1], b = xy_lm$coefficients[2], lty = 2)
+legend("bottomright", legend = c("gam", "lm"), lty = c(1, 2), bty = "n", cex = 1.2)
+
+par(mar = mar2)
+plot(x = seq(from = -1, to = 1, length.out = 100), y = d2_gam, type = "l", xlab = NA, ylab = NA, las = 1,  xlim = c(min(dt_low$driver), max(dt_low$driver)))
+#abline(v = invzfun(-1.000833333, dt_low$driver), col = "cadetblue", lwd = 2)
+mtext(side = 1, "driver", line = 2.5)
+mtext(side = 2, "s''(x)", line = 2.5)
+
+
+# repeat for high sd:
+
+xy_lm <- lm(obs_response~driver, data = dt_high)
+summary(xy_lm) # b = 0.25473, m = 0.26975
+
+xy_gm <- gam(obs_response~s(driver,k=4,bs="tp"), data = dt_high)
+#pred_full <- gratia::fitted_values(gam_full, data = xdt)
+pred_gm <- gratia::fitted_values(xy_gm)$fitted
+
+d2_gam <- gratia::derivatives(xy_gm, data = data.frame(driver = seq(from = -1, to = 1, length.out = 100)), order = 2, eps = 5*10^-6)$derivative
+
+par(mar = mar1)
+plot(x = dt_high$driver, y = dt_high$obs_response, las = 1, xlab = NA, ylab = NA, xaxt = "n",  xlim = c(min(dt_low$driver), max(dt_low$driver)))
+#mtext(side = 1, "driver", line = 2.5)
+#mtext(side = 2, "response", line = 2.5)
+mtext(side = 3, "high obs_sd")
+lines(x = dt_high$driver[order(dt_high$driver)], y = pred_gm[order(dt_high$driver)])
+#abline(v = invzfun(-1.000833333, dt_high$driver), col = "blue", lwd = 2)
+abline(a = xy_lm$coefficients[1], b = xy_lm$coefficients[2], lty = 2)
+#legend("bottomright", legend = c("gam", "lm"), lty = c(1, 2), bty = "n")
+
+par(mar = mar2)
+plot(x = seq(from = -1, to = 1, length.out = 100), y = d2_gam, type = "l", xlab = NA, ylab = NA, las = 1,  xlim = c(min(dt_low$driver), max(dt_low$driver)))
+#abline(v = invzfun(-1.000833333, dt_high$driver), col = "blue", lwd = 2)
+mtext(side = 1, "driver", line = 2.5)
+#mtext(side = 2, "s''(x)", line = 2.5)
+
+dev.off()
+
+```
+
+
+everything seems to be working and the GAM really is being favored in some of these cases (and note here the max(|s''(x)|) threshold definition is being used, so a threshold is detected because there is a max in the second derivative, and based on general simulations this definition seems to tend to have a higher FPR than some of the others)
+
+
+check errors in high vs. low obs error sd cases
+
+```{r}
+
+set.seed(100)
+
+rnorm(10, mean = 0, sd = 0.014)
+
+set.seed(100)
+rnorm(10, mean = 0, sd = 0.14) # these are exactly 10x the errors from when sd = 0.014
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

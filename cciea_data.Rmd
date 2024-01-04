@@ -1,0 +1,254 @@
+---
+title: "cciea_data"
+author: "Raine Detmer"
+date: "2023-12-16"
+output: html_document
+---
+
+code for making supplemental figure with histograms of CCIEA indicator time series lengths and coefficients of variation
+
+
+IEA indicators data downloaded on 9/17/2023 from
+https://www.integratedecosystemassessment.noaa.gov/regions/california-current/california-current-iea-indicators 
+
+
+```{r}
+
+# list containing the links to all the data sets
+
+links <- list("https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SIMP.csv?time,simpson_diversity&population=%22Coastwide%22", # coastwide gf S div
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SIMP.csv?time,simpson_diversity&population=%22North%22",  #north gf S div
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SIMP.csv?time,simpson_diversity&population=%22South%22", #south gf S div
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SP_RICH.csv?time,species_richness&population=%22Coastwide%22", #gf sp rich coastwide
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SP_RICH.csv?time,species_richness&population=%22North%22", # gf sp rich north
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SP_RICH.csv?time,species_richness&population=%22South%22", #gf sp rich south
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Adult%20Anchovy%22", # adult anchovy
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Adult%20Sardine%22", # adult sardine
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Market%20squid%22", # market squid
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Jack%20mackerel%22", # jack mackerel
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Juvenile%20chum%22", #juv chum
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Total%20Krill%22" , # krill
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22anchovy%22", # larval anchovy
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22CA%20smoothtongue%22", # larval CA smoothtongue
+             "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22croakers%22", # larval croakers
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22eared%20blacksmelt%22", # larval eared blacksmelt
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22English%20sole%22", # larval english sole
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22Jack%20mackerel%22", # larval jack mackerel
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22market%20squid%22", # larval market squid
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22northern%20lampfish%22", # larval northern lampfish
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22hake%22", # larval hake
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22Pacific%20mackerel%22", # larval mackerel
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22rockfishes%22", # laral rockfish
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22sanddabs%22", # larval sanddab
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22sardine%22", # larval sardine
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22slender%20sole%22", # larval slender sole
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Market%20Squid%22", # market squid ccc
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Total%20Myctophids%22", # myctophids
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Northern%20anchovy%22", # N anchovy
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Octopus%22", # octopus,
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Pompano%22", # Pa pompano
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pacific%20chub%20mackerel%22", # Pa chub mackerel
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pacific%20hake%22", # Pa hake
+             "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pacific%20herring%22", # Pa herring
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pacific%20sardine%22", # Pa sardine
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pacific%20spiny%20dogfish%22", # Pa spiny dogfish
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Pyrosomes%22", # pyrosomes CCC
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Pyrosome%22", # pyrosomes NCC
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Salps%22", # salps
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBS.csv?time,relative_abundance&larval_species_group=%22southern%20mesopelagics%22", # southern mesopelagics
+             "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Subyearling%20Chinook%22", #subyearling chinook
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Surf%20smelt%22", # surfsmelt
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22Thetys%22", # thetys
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22Whitebait%20smelt%22", # whitebait smelt
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22YOY%20Anchovy%22", # yoy anch
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22YOY%20Pacific%20Hake%22", # yoy hake CCC
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22YOY%20Pacific%20hake%22", # yoy hake NCC
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22YOY%20Rockfish%22", # yoy rockfish
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22YOY%20Sanddabs%22", # yoy sanddabs
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBC.csv?time,mean_cpue&species_group=%22YOY%20Sardine%22", # yoy sardine
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FPN.csv?time,prevalence&species_group=%22YOY%20Rockfish%20(spp.)%22", # yoy rockfish NCC
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Yearling%20Chinook%22", # yearling chinook
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Yearling%20Coho%22", # yearling coho
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Juvenile%20sockeye%22", #yearling sockeye
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_COP.csv?time,biomass_anomaly&cohort=%22NorthernBiomassAnomaly%22", # N copepod biomass anomaly
+             "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_COP.csv?time,biomass_anomaly&cohort=%22SouthernBiomassAnomaly%22", # S copepod biomass anomaly
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_CRAB_FINF.csv?time,biomass_ratio&population=%22Coastwide%22", #fin to crab biomass ratio coastwide
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_CRAB_FINF.csv?time,biomass_ratio&population=%22North%22", # fin to crab north
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_CRAB_FINF.csv?time,biomass_ratio&population=%22South%22", # fin to crab south
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_MTL.csv?time,mean_trophic_level&population=%22Coastwide%22", # groundfish mean trophic level coastwide
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_MTL.csv?time,mean_trophic_level&population=%22North%22", # gf mean trophic level north
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_MTL.csv?time,mean_trophic_level&population=%22South%22", # gf mean trophic level south
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SCAV_RAT.csv?time,biomass_ratio&population=%22Coastwide%22", # scavenger biomass ratio coastwide
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SCAV_RAT.csv?time,biomass_ratio&population=%22North%22", # scavenger biomass ration north
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_SCAV_RAT.csv?time,biomass_ratio&population=%22South%22", # scavenger biomass ratio south
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Aequorea%20Water%20Jelly%22",# Aequorea jelly
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Moon%20jelly%22", # aurelia moon jelly
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Chrysaora%20Sea%20Nettle%22", # sea nettle
+              "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_EI_FBN.csv?time,mean_density&species_group=%22Egg%20yolk%20jelly%22" # egg yolk jelly
+              ) 
+
+
+```
+
+
+```{r}
+# names of all of the datasets in the above list
+
+dt_names <- c("coastwide groundfish Simp div" , "north gf S div" , "south gf S div" , "gf sp rich coastwide" , "gf sp rich north" , "gf sp rich south" , "adult anchovy" , "adult sardine" ,"market squid NCC", "jack mackerel" , "juv chum" , "krill" , "larval anchovy" , "larval CA smoothtongue" , "larval croakers",  "larval eared blacksmelt",  "larval english sole",  "larval jack mackerel", "larval market squid", "larval northern lampfish", "larval hake", "larval mackerel", "larval rockfish", "larval sanddab" , "larval sardine", "larval slender sole", "market squid ccc", "myctophids (lanternfish)" , "N anchovy", "octopus", "PA pompano", "PA chub mackerel", "PA hake",  "PA herring", "PA sardine", "PA spiny dogfish" , "pyrosomes CCC" , "pyrosomes NCC" , "salps",  "southern mesopelagics" , "subyearling chinook" , "surfsmelt" , "thetys",  "whitebait smelt", "yoy anch", "yoy hake CCC" , "yoy hake NCC",  "yoy rockfish CCC" , "yoy sanddabs" , "yoy sardine" , "yoy rockfish NCC" , "yearling chinook", "yearling coho", "yearling sockeye" , "N copepod biomass anomaly" ,  "S copepod biomass anomaly" , "crab to fin biomass ratio coastwide", "crab to fin north", "crab to fin south", "groundfish mean trophic level coastwide", "gf mean trophic level north" , "gf mean trophic level south" , "scavenger biomass ratio coastwide" , "scavenger biomass ratio north" , "scavenger biomass ratio south", "Aequorea jelly", "aurelia moon jelly", "sea nettle", "egg yolk jelly") 
+
+
+```
+
+```{r}
+# check lengths are the same
+length(links)
+
+length(dt_names)
+
+```
+
+
+```{r}
+
+# download the data
+dt <- vector(mode = "list", length = 1)
+
+for(i in 1:length(links)){
+  
+  dti <- read.csv(links[[i]])
+  dti <- dti[-1, ] # remove header row
+  
+  dt[[i]] <- dti
+  
+ # print(colnames(dti))
+  
+}
+
+
+```
+
+
+```{r}
+
+# get summary statistics
+ts_lengths <- rep(NA, length(dt)) # time series length
+cv_vals <- rep(NA, length(dt)) # coeff of variation
+mean_vals <- rep(NA, length(dt)) # mean of response variable
+sd_vals <- rep(NA, length(dt)) # sd of response variable
+min_vals <- rep(NA, length(dt)) # min value of response variable
+
+for(i in 1:length(dt)){
+  dti <- dt[[i]]
+  
+  #yvals1 <- as.numeric(dti[ ,2])
+  # scale to be between 0 and max (so negative values don't mess up cv)
+ # yvals <- (yvals1-min(yvals1, na.rm = T))/(max(yvals1, na.rm = T)-min(yvals1, na.rm = T))
+  
+  yvals <-  as.numeric(dti[ ,2])
+  
+  ts_lengths[i] <- length(which(is.na(yvals)==F))
+  cv_vals[i] <- sd(yvals, na.rm = T)/mean(yvals, na.rm = T)
+  mean_vals[i] <- mean(yvals, na.rm = T)
+  sd_vals[i] <- sd(yvals, na.rm = T)
+  min_vals[i] <- min(yvals, na.rm = T)
+}
+
+cciea <- data.frame(
+  ts_length = ts_lengths,
+  cv = cv_vals,
+  mean = mean_vals,
+  sd = sd_vals,
+  min = min_vals,
+  dt_name = dt_names
+)
+
+#View(cciea)
+#View(dt[[55]]) # copepod biomass anomalies are measured approx monthly so don't count these ts lengths
+
+
+```
+
+
+
+plot histograms of time series lengths (excluding the copepod anomalies which are measured monthly) and coefficients of variations (excluding indicators whose values were both positive and negative)
+
+```{r}
+
+#length(which(cciea$ts_length==25))
+
+pdf("figurepdfs/cciea_sim_pars.pdf", width = 4.5, height = 2)
+par(mfrow = c(1, 2))
+par(mar=c(2, 1.25, 0.5, 0.75), oma = c(1, 1.2, 1.2, 0.1))
+hist(cciea$ts_length[which(cciea$dt_name !="N copepod biomass anomaly" & cciea$dt_name != "S copepod biomass anomaly")], n = 20, xlab = NA,ylab = NA, las = 1, main = NA, xaxs = "i", yaxs = "i",xlim = c(15, 35), ylim = c(0, 40), xaxt = "n", yaxt = "n")
+axis(side = 1, at = c(15, 20, 25, 30, 35), padj = -1.75, cex.axis = 0.75, tcl = -0.25)
+axis(side = 2, at = c(0, 10, 20, 30, 40), labels = c(NA, 10, 20, 30, 40), las = 1, cex.axis = 0.75, tcl = -0.25, hadj = -0.01)
+mtext(side = 1, "Years in time series", line = 1, cex = 0.85)
+mtext(side = 2, "Frequency", line = 1.5, cex = 0.85)
+mtext(side = 3, "Time series length", adj = 0, line = 0.5, cex = 1)
+
+hist(cciea$cv[which(cciea$min >=0)], n = 20, xlab = NA, ylab = NA, main = NA, las = 1, xaxs = "i", yaxs = "i", xaxt = "n", yaxt = "n", ylim = c(0, 15))
+axis(side = 1, at = c(0, 1, 2, 3, 4, 5), padj = -1.75, cex.axis = 0.75, tcl = -0.25)
+axis(side = 2, at = c(0, 5, 10, 15), labels = c(NA, 5, 10, 15), las = 1, cex.axis = 0.75, tcl = -0.25, hadj = -0.01)
+mtext(side = 1, "Coefficient of variation (cv)", line = 1, cex = 0.85)
+#mtext(side = 2, "Frequency", line = 2.5)
+mtext(side = 3, "Observation error", adj = 0, line = 0.5, cex = 1)
+#mtext(side = 3, "CCIEA indicator time series CVs \n(excluding indicators w/ neg. values)")
+
+dev.off()
+
+```
+
+look more closely at the CV and time series length values
+
+```{r}
+
+# check which indicators had large cv's
+cciea[which(cciea$min >=0 & cciea$cv > 1), ]
+
+```
+
+
+some of these are large bc the mean is small, e.g., for YOY Hake NCC, the mean is 0.0016 and the sd is only 0.008
+
+check the smaller end of the cv values:
+
+```{r}
+hist(cciea$cv[which(cciea$min >=0 & cciea$cv < 2)], n = 40, xlab = "cv", main = "CCIEA time series CVs (values <2 only)", las = 1)
+
+hist(cciea$cv[which(cciea$min >=0 & cciea$cv < 0.2)], n = 20, xlab = "cv", main = "CCIEA time series CVs (values <0.2 only)", las = 1)
+
+cciea[which(cciea$min >=0 & cciea$cv < 0.2),] # everything less than 0.2 is a derived value (diversity and trophic structure indicators)
+
+mean(cciea$cv[which(cciea$min >=0 & cciea$cv < 0.2)]) # mean cv of these is 0.05
+mean(cciea$cv[which(cciea$min >=0 & cciea$cv > 0.2 & cciea$cv < 1)]) # 0.63
+median(cciea$cv[which(cciea$min >=0 & cciea$cv > 0.2 & cciea$cv < 1)]) # 0.65
+
+mean(cciea$cv[which(cciea$min >=0)]) # overall mean is 0.83 
+
+median(cciea$cv[which(cciea$min >=0)]) # over all median is 0.65
+
+quantile(cciea$cv[which(cciea$min >=0)], 0.5)# 0.65
+
+
+
+```
+
+
+the overall median cv is 0.65, and note the smallest values (<0.2; have a mean of 0.05) are all derived values (diversity and trophic structure indicators). 
+
+time series lengths:
+
+```{r}
+
+min(cciea$ts_length[which(cciea$dt_name !="N copepod biomass anomaly" & cciea$dt_name != "S copepod biomass anomaly")]) # 18
+
+max(cciea$ts_length[which(cciea$dt_name !="N copepod biomass anomaly" & cciea$dt_name != "S copepod biomass anomaly")]) # 33
+
+mean(cciea$ts_length[which(cciea$dt_name !="N copepod biomass anomaly" & cciea$dt_name != "S copepod biomass anomaly")]) # 24.5
+
+median(cciea$ts_length[which(cciea$dt_name !="N copepod biomass anomaly" & cciea$dt_name != "S copepod biomass anomaly")]) # 24
+
+```
+
+
+most of time series are 25 years (low is 18 and max is 33)
