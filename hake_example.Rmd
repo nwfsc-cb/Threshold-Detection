@@ -11,6 +11,7 @@ README: code for analyses of spatial hake-temperature relationships. Note this R
 
 ```{r}
 library("mgcv")
+library("MuMIn") # for AICc
 library("gratia")
 library("tidyverse")
 library("pracma") # for findpeaks function
@@ -172,13 +173,19 @@ check for evidence of a nonlinear relationship between the driver (mean temperat
 
 ```{r}
 
-lin_test(dt = hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US")# gam better by 1.1
-
-lin_test(dt = hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US") # gam better by 1.1
-lin_test(dt = hake_age3_4, xvar = "temp_100_anom", yvar = "age3_4_CA_US") # exact same
-lin_test(dt = hake_age2, xvar = "temp_100_anom", yvar = "age2_CA_US") # exact same
+#lin_test(dt = hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US")# gam better by 1.1
+#lin_test(dt = hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US") # gam better by 1.1
+#lin_test(dt = hake_age3_4, xvar = "temp_100_anom", yvar = "age3_4_CA_US") # exact same
+#lin_test(dt = hake_age2, xvar = "temp_100_anom", yvar = "age2_CA_US") # exact same
 
  
+lin_test(dt = hake_tot, xvar = "temp_100_anom", yvar = "wgt_total_CA_US", aic_type = "AICc")# lm better by 0.2
+lin_test(dt = hake_age5_20, xvar = "temp_100_anom", yvar = "age5_20_CA_US", aic_type = "AICc") # lm better by 1.6
+lin_test(dt = hake_age3_4, xvar = "temp_100_anom", yvar = "age3_4_CA_US", aic_type = "AICc") # exact same
+lin_test(dt = hake_age2, xvar = "temp_100_anom", yvar = "age2_CA_US", aic_type = "AICc") # exact same
+
+
+
 ```
 
 ## gam and deriv fitting
@@ -295,13 +302,40 @@ thresh_5_20_summ <- jack_thresh(as.data.frame(hake_age5_20_sim), x_pred = NA, xl
 
 ```
 
+
+
+look at the model summaries
+
+```{r}
+
+# linear model for the age 5-20 group
+summary(age5_20_hake.lm)
+
+# gam for the age 5-20 group
+summary(age5_20_hake.gm)
+
+# gam for the age 3-4 group
+summary(age3_4_hake.gm)
+
+# gam for the age 2 group
+summary(age2_hake.gm)
+
+# total
+summary(tot_hake.gm)
+
+```
+
+
 ## age 5-20
 
 plot the linear and gam model fits with the data for the age 5-20 group
 
 ```{r}
 
-pdf("figurepdfs/hake_fits_520.pdf", height = 3.5)
+lab_adj <- 0.04 # how high above points to put year label
+ymax <- 0.75
+
+pdf("figurepdfs/hake_fits_520_test.pdf", height = 3.5)
 par(mfrow = c(1, 2))
 par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
 
@@ -311,7 +345,7 @@ plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, 
 axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2)) #, labels = NA
 axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), las = 1)
 #axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 mtext(side = 3, "GAM")
 mtext(side = 2, "Proportion biomass in Canada", line = 2.5)
@@ -321,7 +355,7 @@ mtext(side = 1, "Mean 100m temperature anomaly between 45-49ºN", line = 1.5, ou
 for(i in 1:3){
 text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i]-0.01, y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.675)
 }
-abline(v = thresh_5_20_summ$thresh_mean[which(thresh_5_20_summ$thresh_method=="abs_max_d2"& thresh_5_20_summ$sig_type=="none")], col = "blue", lty = 2)
+abline(v = thresh_5_20_summ$thresh_mean[which(thresh_5_20_summ$thresh_method=="abs_max_d2"& thresh_5_20_summ$sig_type=="none")], col = "blue", lty = 1)
 
 dt_sub <- lm_df
 
@@ -330,7 +364,7 @@ axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2)) #, labels = NA
 axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), labels = NA)
 mtext(side = 3, "Linear model")
 #axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 #mtext(side = 3, "Ages 5-20", line = -1.5)
 # add the extreme points
@@ -365,7 +399,7 @@ hake_xs <- seq(from = min(hake_x, na.rm = T), to = max(hake_x, na.rm = T), lengt
 
 
 # plot results
-pdf("figurepdfs/hake_fits_all.pdf")
+pdf("figurepdfs/hake_fits_all_test.pdf")
 par(mfrow = c(2, 2))
 par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
 # total
@@ -373,7 +407,7 @@ dt_sub <- pred_df[which(pred_df$hake_sub=="tot"),]
 plot(x = hake_tot$temp_100_anom, y = hake_tot$wgt_total_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, ymax), xaxt = "n")
 axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2), labels = NA)
 mtext(side = 2, "Proportion biomass in Canada", line = 1.25, outer = T)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 mtext(side = 3, "Total hake biomass", line = -1.5)
 # add the extreme points
@@ -389,7 +423,7 @@ plot(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, xlab = NA, 
 axis(side = 1, at = seq(from = -0.4, to = 0.4, by = 0.2), labels = NA)
 axis(side = 2, at = seq(from = 0, to = 0.6, by = 0.2), labels = NA)
 #axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 mtext(side = 3, "Ages 5-20", line = -1.5)
 # add the extreme points
@@ -404,7 +438,7 @@ plot(x = hake_age3_4$temp_100_anom, y = hake_age3_4$age3_4_CA_US, xlab = NA, yla
 #axis(side = 2, at = seq(0, 0.6, by = 0.1), las = 1)
 mtext(side = 3, "Ages 3-4", line = -1.5)
 mtext(side = 1, "Mean 100m temperature anomaly between 45-49ºN", line = 1.5, outer = T)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 
 for(i in 1:3){
@@ -418,7 +452,7 @@ plot(x = hake_age2$temp_100_anom, y = hake_age2$age2_CA_US, xlab = NA, ylab = NA
 axis(side = 2, at = seq(0, 0.6, by = 0.2), labels = NA)
 mtext(side = 3, "Age 2", line = -1.5)
 #mtext(side = 1, "Mean 100m temp anomaly between 45-49ºN (standardized)", line = 0.5, outer = T)
-lines(x =hake_x, y = dt_sub$mn)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 
 for(i in 1:3){
@@ -699,6 +733,11 @@ for(p in 1:length(parmat_h[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/hake_sim2.csv")
+
+#jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 hs_jdf <- jdf
 hs_jdf$shape <- rep("hockeystick", length(hs_jdf$sim))
 hs_jdf$best_mod <- lndf$best_mod
@@ -791,6 +830,11 @@ for(p in 1:length(parmat_h[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/hake_sim2.csv")
+
+#jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 ln_jdf <- jdf
 ln_jdf$shape <- rep("linear", length(ln_jdf$sim))
 ln_jdf$best_mod <- lndf$best_mod
@@ -805,6 +849,8 @@ ln_jdf$aic_diff <- lndf$aic_diff
 hake_sim_df <- rbind(hs_jdf, ln_jdf)
 
 write.csv(hake_sim_df, "simulation outputs/hake_sim2.csv")
+
+#View(hake_sim_df)
 
 ```
 
@@ -896,6 +942,8 @@ roc_df_weak <- left_join(tpr_df, fpr_df, by = c("thresh_method", "obs_error", "t
 # join the weak and strict detection cases together
 roc_df <- rbind(roc_df_strict, roc_df_weak)
 
+#View(roc_df)
+
 #head(data_sub)
 
 ```
@@ -929,7 +977,7 @@ for(i in 1:length(obs_set_h)){
 for(j in 1:length(ts_set_h)){
   
  # print(paste(pt_cols[i], pt_pch[j], sep = ","))
-points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
 }  
 }
 # put circle around current conditions
@@ -956,7 +1004,7 @@ for(i in 1:length(obs_set_h)){
 for(j in 1:length(ts_set_h)){
   
  # print(paste(pt_cols[i], pt_pch[j], sep = ","))
-points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
 }  
 }
 
@@ -1045,7 +1093,7 @@ for(i in 1:length(obs_set_h)){
 for(j in 1:length(ts_set_h)){
   
  # print(paste(pt_cols[i], pt_pch[j], sep = ","))
-points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
 }  
 }
 
@@ -1072,7 +1120,7 @@ for(i in 1:length(obs_set_h)){
 for(j in 1:length(ts_set_h)){
   
  # print(paste(pt_cols[i], pt_pch[j], sep = ","))
-points(x = dt_sub$FPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(dt_sub$obs_error==obs_set_h[i] & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
+points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], y = dt_sub$TPR[which(as.character(dt_sub$obs_error)==as.character(obs_set_h[i]) & dt_sub$ts_length==ts_set_h[j])], pch = pt_pch[j], col = pt_cols[i]) #adjustcolor(pt_cols[i], alpha.f = pt_alpha[j])
 }  
 }
 
