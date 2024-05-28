@@ -15,10 +15,12 @@
 #' @param z_scale if TRUE, standardize the data before fitting (default), if FALSE use raw data
 #' @param knots number of knots to use in the gam fitting, defaults to 4
 #' @param smooth_type type of smooth used with gams, defaults to "tp"
+#' @param aicc_size sample size below which AICc is used instead of AICc
 
 
 lin_check <- function(simdt, thresh_methods = c("abs_max_d2", "min_d2", "zero_d2", "zero_d1"),
-                      sig_criteria = c("none", "jack_quant", "sim_int"), z_scale = TRUE, knots = 4, smooth_type = "tp", span = 0.1){
+                      sig_criteria = c("none", "jack_quant", "sim_int"), z_scale = TRUE, knots = 4,
+                      smooth_type = "tp", aicc_size = 40){ #, span = 0.1
 
   # get the number of simulations that were run
   nsim <- length(unique(simdt$sim))
@@ -56,8 +58,15 @@ lin_check <- function(simdt, thresh_methods = c("abs_max_d2", "min_d2", "zero_d2
     lm_full <- lm(obs_response ~ driver, data = datIN)
 
     # get the AIC values
-    gam_aic <- AIC(gam_full)
-    lm_aic <- AIC(lm_full)
+    if(length(datIN$driver) >= aicc_size){
+      gam_aic <- AIC(gam_full)
+      lm_aic <- AIC(lm_full)
+    } else{
+      gam_aic <- AICc(gam_full)
+      lm_aic <- AICc(lm_full)
+    }
+
+
 
     if(gam_aic < lm_aic){ # if gam has smaller AIC than the lm
 

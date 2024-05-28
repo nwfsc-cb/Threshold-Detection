@@ -6,8 +6,9 @@
 #' @param yvar the name of the response variable
 #' @param knots knots for the gam() function
 #' @param smooth_type the type of smoother for the gam() function
+#' @param aic_type whether to use AIC or AICc for model selection
 
-lin_test <- function(dt, xvar, yvar, knots = 4, smooth_type = "tp"){
+lin_test <- function(dt, xvar, yvar, knots = 4, smooth_type = "tp", aic_type = "AIC"){
 
   dtIn <- dt
 
@@ -23,7 +24,13 @@ lin_test <- function(dt, xvar, yvar, knots = 4, smooth_type = "tp"){
   dt.gm <- gam(obs_response~s(driver,k=knots,bs=smooth_type),data = dtIn)
 
   # get the AICs
-  AICs <- AIC(dt.lm, dt.gm)
+  if(aic_type=="AIC"){
+    AICs <- AIC(dt.lm, dt.gm)
+  }
+
+  if(aic_type=="AICc"){
+    AICs <- AICc(dt.lm, dt.gm)
+  }
 
   return(AICs)
 }
