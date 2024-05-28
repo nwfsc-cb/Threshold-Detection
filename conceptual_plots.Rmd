@@ -345,6 +345,234 @@ dev.off()
 ```
 
 
+repeat the above figure but with the actual data points added to the GAM plots
+
+```{r}
+# outer panels: 2 x 3
+
+# how much to squish the x and y axes in the plot insets
+x_sq <- 1.8 
+y_sq <- 2
+
+ymin_s <- -0.25
+ymax_s <- 3.25
+
+ci_width <- 0.25 # how wide to make the fake CIs
+
+thresh_cex <- 1.5 # size of the threshold points
+thresh_lwd <- 1.5 # thickness of threshold lines
+
+def_cex <- 0.75 # size of threshold definition text
+
+lwd_gam <- 2 # thickness of the f(x) and s(x) lines
+
+pdf("figurepdfs/Thresh_defs2.pdf", width = 7, height = 4)#width = 2.6, height = 2
+#par(mfrow = c(2, 3))
+layout(matrix(c(1,1,3, 3, 1, 2, 3, 4, 5, 5, 7, 7, 5, 6, 7, 8, 9, 9, 11, 11, 9, 10, 11, 12), 4, 6))#, widths = c(1, 1), heights = c(1, 1, 1)
+#layout.show(6)
+par(mar=c(0, 0.25, 0.5, 0.25), oma = c(1.25, 1, 0.8, 0.1))
+
+# SIGMOIDAL
+# true
+true_y <- control_pars_sg1$y_max/(1 + exp(-control_pars_sg1$sig_k*(true_x-sig_infl_pt(control_pars_sg1$y_max, control_pars_sg1$sig_k, control_pars_sg1$thresh_loc))))
+
+true_d2 <- sg_d2(x = true_x, L = control_pars_sg1$y_max, k = control_pars_sg1$sig_k, m = sig_infl_pt(control_pars_sg1$y_max, control_pars_sg1$sig_k, control_pars_sg1$thresh_loc))
+
+#pdf("figurepdfs/Thresh_defsa.pdf", width = 6.5, height = 4.5)
+plot(true_x, true_y, type = "l", xaxt = "n", yaxt = "n", xlab = NA, ylab = NA, lwd = lwd_gam)
+points(x = control_pars_sg1$thresh_loc, y = true_y[which(true_x==control_pars_sg1$thresh_loc)], pch = 16, cex = thresh_cex)
+#text(x = 4, y = 2, "True: min(f''(x))")
+mtext(side = 3, "True threshold: \nmin(f''(x))", line = -2.75, adj = 0.05, cex = def_cex)
+mtext(side = 2, "f(x)", line = 0)
+mtext(side = 3, "Sigmoidal (SG)") #, adj = 0
+#abline(v = 3, lty = 2, lwd = thresh_lwd)
+
+plot(x=true_x, y=true_d2, type = "l", xaxt = "n", yaxt = "n", lwd = lwd_gam)
+axis(side = 2, labels = NA, tick = F)
+mtext(side = 2, "f '' (x)", line = 0)
+#mtext(side = 3, "True: min(f''(x))")
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+abline(v = 3, lty = 2, lwd = thresh_lwd)
+#box()
+#dev.off()
+
+# gam fits
+fun_test1 <- sim_data(nsim = 1, tmax = tmaxb, fun = "sigmoidal", control_pars = control_pars_sg1, driver_pars = driver_pars_b, cov_pars = cov_pars_b) 
+fun_test1$driver <- zfun(fun_test1$driver)
+
+gam_ex <- gam(obs_response~s(driver,k=4,bs="tp"),data = fun_test1) 
+pred_ex <- gratia::fitted_values(gam_ex, data = xdt)
+pred_ex_mn <- predict(loess(pred ~ driver, data=data.frame(pred = pred_ex$fitted, driver = xvals1), span=0.1))
+
+D1_ex <- gratia::derivatives(gam_ex, data = xdt, order = 1, eps = 5*10^-6)
+D1_ex_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_ex$derivative, driver = xvals1), span=0.1))
+
+D2_ex <- gratia::derivatives(gam_ex, data = xdt, order = 2, eps = 5*10^-6)
+D2_ex_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_ex$derivative, driver = xvals1), span=0.1))
+
+d1_zero_ex <- root_threshF(D1_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2_zero_ex <- root_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2min_ex <- min_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+d2max_ex <- abs_max_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+thresh_ex <- c(d2max_ex, d2min_ex, d1_zero_ex, d2_zero_ex)
+
+plot(x = xvals1, pred_ex_mn, las = 1, xlab = NA, ylab = NA, type = "l", col = "gray30", lwd = lwd_gam, xlim = c(min(xvals1), max(xvals1)), ylim = c(ymin_s, ymax_s), xaxt = "n", yaxt = "n")#, ylim = c(ymin, ymax)
+# add the data points
+lines(x = fun_test1$driver, y = fun_test1$obs_response, pch = 16, col = adjustcolor("black", alpha.f = 0.1), type = "p")
+#text(x = 1, y = 2, "Statistical: \nmin(s''(x))", col = threshcols[2])
+mtext(side = 3, "Statistical threshold: \nmin(s''(x))", line = -2.75, adj = 0.05, cex = def_cex, col = threshcols[2])
+polygon(x = c(xvals1, rev(xvals1)), y = c(pred_ex_mn-ci_width, rev(pred_ex_mn + ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+#abline(v = 0, lty = 2, lwd = thresh_lwd)
+points(x = 0, y = pred_ex_mn[which(abs(xvals1-0)==min(abs(xvals1-0)))], pch = 16, cex = thresh_cex)
+mtext(side = 2, "s(x)", line = 0)#, outer = TRUE
+mtext(side = 1, "x (driver)", line = 0.35)
+points(x = thresh_ex[2], y = pred_ex_mn[which(abs(xvals1-thresh_ex[2])==min(abs(xvals1-thresh_ex[2])))], col = threshcols[2], pch = 16, cex = thresh_cex)
+points(x = thresh_ex[2], y = pred_ex_mn[which(abs(xvals1-thresh_ex[2])==min(abs(xvals1-thresh_ex[2])))], pch = 1, cex = 1.1*thresh_cex)
+
+
+#View(fun_test1)
+
+plot(x = xvals1, D2_ex_mn, las = 1, xaxt = "n", yaxt = "n", type = "l", xlim = c(min(xvals1), max(xvals1)), lwd = lwd_gam)
+#mtext(side = 3, "Statistical: min(s''(x))")
+polygon(x = c(xvals1, rev(xvals1)), y = c(D2_ex_mn-ci_width, rev(D2_ex_mn + ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+abline(v = 0, lty = 2, lwd = thresh_lwd)
+abline(v = thresh_ex[2], col = threshcols[2], lwd = thresh_lwd)
+mtext(side = 2, "s '' (x)", line = 0)#, outer = TRUE
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+
+# SKEW
+
+skew_var = (control_pars_sk1$skew_cv * control_pars_sk1$thresh_loc) ^ 2
+pars <- solve_gamma(control_pars_sk1$thresh_loc, skew_var) # get the parameters of the gamma dist
+max_dens <- dgamma(control_pars_sk1$thresh_loc, shape = pars$shape, scale = pars$scale)
+
+true_y <-  dgamma(true_x, shape = pars$shape, scale = pars$scale)*(control_pars_sk1$y_max / max_dens)
+
+true_d1 <- sk_d1(x = true_x, theta = pars$scale, k = pars$shape)*(control_pars_sk1$y_max / max_dens)
+
+plot(true_x, true_y, type = "l", xaxt = "n", yaxt = "n", xlab = NA, ylab = NA, lwd = lwd_gam)
+points(x = control_pars_sk1$thresh_loc, y = true_y[which(true_x==control_pars_sk1$thresh_loc)], pch = 16, cex = thresh_cex)
+#text(x = 4, y = 2, "True: f'(x)=0")
+mtext(side = 3, "True \nthreshold: \nf'(x)=0", line = -3.75, adj = 0.05, cex = def_cex)
+#mtext(side = 2, "f(x)", line = 0)
+mtext(side = 3, "Skew (SK)") #, adj = 0
+#abline(v = 3, lty = 2, lwd = thresh_lwd)
+
+plot(x=true_x, y=true_d1, type = "l", xaxt = "n", yaxt = "n", lwd = lwd_gam)
+axis(side = 2, labels = NA, tick = F)
+mtext(side = 2, "f ' (x)", line = 0)
+#mtext(side = 3, "True: f'(x)=0")
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+abline(v = 3, lty = 2, lwd = thresh_lwd)
+
+# gam fits
+fun_test1 <- sim_data(nsim = 1, tmax = tmaxb, fun = "skew", control_pars = control_pars_sk1, driver_pars = driver_pars_b, cov_pars = cov_pars_b) 
+fun_test1$driver <- zfun(fun_test1$driver)
+
+gam_ex <- gam(obs_response~s(driver,k=4,bs="tp"),data = fun_test1) 
+pred_ex <- gratia::fitted_values(gam_ex, data = xdt)
+pred_ex_mn <- predict(loess(pred ~ driver, data=data.frame(pred = pred_ex$fitted, driver = xvals1), span=0.1))
+
+D1_ex <- gratia::derivatives(gam_ex, data = xdt, order = 1, eps = 5*10^-6)
+D1_ex_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_ex$derivative, driver = xvals1), span=0.1))
+
+D2_ex <- gratia::derivatives(gam_ex, data = xdt, order = 2, eps = 5*10^-6)
+D2_ex_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_ex$derivative, driver = xvals1), span=0.1))
+
+d1_zero_ex <- root_threshF(D1_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2_zero_ex <- root_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2min_ex <- min_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+d2max_ex <- abs_max_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+thresh_ex <- c(d2max_ex, d2min_ex, d1_zero_ex, d2_zero_ex)
+
+plot(x = xvals1, pred_ex_mn, las = 1, xlab = NA, ylab = NA, type = "l", col = "gray30", lwd = lwd_gam, xlim = c(min(xvals1), max(xvals1)), ylim = c(ymin_s, ymax_s), xaxt = "n", yaxt = "n")#, ylim = c(ymin, ymax)
+#text(x = 1, y = 2, "Statistical: \ns'(x)=0", col = threshcols[3])
+# add the data points
+lines(x = fun_test1$driver, y = fun_test1$obs_response, pch = 16, col = adjustcolor("black", alpha.f = 0.1), type = "p")
+mtext(side = 3, "Statistical \nthreshold: \ns'(x)=0", line = -3.75, adj = 0.05, cex = def_cex, col = threshcols[3])
+polygon(x = c(xvals1, rev(xvals1)), y = c(pred_ex_mn-ci_width, rev(pred_ex_mn + ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+#abline(v = 0, lty = 2, lwd = thresh_lwd)
+#mtext(side = 2, "s(x)", line = 0)#, outer = TRUE
+mtext(side = 1, "x (driver)", line = 0.35)
+points(x = thresh_ex[3], y = pred_ex_mn[which(abs(xvals1-thresh_ex[3])==min(abs(xvals1-thresh_ex[3])))][1], col = threshcols[3], pch = 16, cex = thresh_cex)
+points(x = 0, y = pred_ex_mn[which(abs(xvals1-0)==min(abs(xvals1-0)))], pch = 1, cex = 1.1*thresh_cex)
+
+plot(x = xvals1, D1_ex_mn, las = 1, xaxt = "n", yaxt = "n", type = "l", xlim = c(min(xvals1), max(xvals1)), lwd = lwd_gam)
+#mtext(side = 3, "Statistical: min(s''(x))")
+polygon(x = c(xvals1, rev(xvals1)), y = c(D1_ex_mn-ci_width, rev(D1_ex_mn + ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+abline(v = thresh_ex[3], col = threshcols[3], lwd = thresh_lwd)
+abline(v = 0, lty = 2, lwd = thresh_lwd)
+mtext(side = 2, "s ' (x)", line = 0)#, outer = TRUE
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+
+# HOCKEYSTICK
+true_y <- true_hs(true_x, y_max = control_pars_hs1$y_max, y_min = control_pars_hs1$y_min, thresh_loc = control_pars_hs1$thresh_loc, type = control_pars_hs1$hs_type, a = control_pars_hs1$hs_a)
+
+true_d2 <- hs_d2(x = true_x, control_pars_hs1$thresh_loc, na_width = 0.1)
+
+plot(true_x, true_y, type = "l", xaxt = "n", yaxt = "n", xlab = NA, ylab = NA, lwd = lwd_gam)
+points(x = control_pars_hs1$thresh_loc, y = true_y[which(true_x==control_pars_hs1$thresh_loc)], pch = 16, cex = thresh_cex)
+#text(x = 4, y = 2, "True: breakpoint")
+mtext(side = 3, "True threshold: \nbreakpoint", line = -2.75, adj = 0.05, cex = def_cex)
+#mtext(side = 2, "f(x)", line = 0)
+mtext(side = 3, "Hockeystick (HS)") #, adj = 0
+#abline(v = 3, lty = 2, lwd = thresh_lwd)
+
+plot(x=true_x, y=rep(3, length(true_d2)), type = "l", xaxt = "n", yaxt = "n", ylim = c(-1, 1))
+axis(side = 2, labels = NA, tick = F)
+mtext(side = 2, "f '' (x)", line = 0)
+#mtext(side = 3, "True: breakpoint")
+abline(v = 3, lty = 2, lwd = thresh_lwd)
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+lines(x = true_x, y = true_d2, type = "l", lwd = lwd_gam)
+points(x = control_pars_hs1$thresh_loc, y = 0, pch = 16, col = "white")
+points(x = control_pars_hs1$thresh_loc, y = 0)
+
+# gam fits
+fun_test1 <- sim_data(nsim = 1, tmax = tmaxb, fun = "hockeystick", control_pars = control_pars_hs1, driver_pars = driver_pars_b, cov_pars = cov_pars_b) 
+fun_test1$driver <- zfun(fun_test1$driver)
+
+gam_ex <- gam(obs_response~s(driver,k=4,bs="tp"),data = fun_test1) 
+pred_ex <- gratia::fitted_values(gam_ex, data = xdt)
+pred_ex_mn <- predict(loess(pred ~ driver, data=data.frame(pred = pred_ex$fitted, driver = xvals1), span=0.1))
+
+D1_ex <- gratia::derivatives(gam_ex, data = xdt, order = 1, eps = 5*10^-6)
+D1_ex_mn <- predict(loess(d1 ~ driver, data=data.frame(d1 = D1_ex$derivative, driver = xvals1), span=0.1))
+
+D2_ex <- gratia::derivatives(gam_ex, data = xdt, order = 2, eps = 5*10^-6)
+D2_ex_mn <- predict(loess(d2 ~ driver, data=data.frame(d2 = D2_ex$derivative, driver = xvals1), span=0.1))
+
+d1_zero_ex <- root_threshF(D1_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2_zero_ex <- root_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA)
+d2min_ex <- min_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+d2max_ex <- abs_max_threshF(D2_ex_mn, sig_type = "none", xvals1, NA, NA, pkht = 10^-3, pkup = 3)
+thresh_ex <- c(d2max_ex, d2min_ex, d1_zero_ex, d2_zero_ex)
+
+plot(x = xvals1, pred_ex_mn, las = 1, xlab = NA, ylab = NA, type = "l", col = "gray30", lwd = lwd_gam, xlim = c(min(xvals1), max(xvals1)), ylim = c(ymin_s, ymax_s), xaxt = "n", yaxt = "n")#, ylim = c(ymin, ymax)
+# add the data points
+lines(x = fun_test1$driver, y = fun_test1$obs_response, pch = 16, col = adjustcolor("black", alpha.f = 0.1), type = "p")
+#text(x = 1, y = 2, "Statistical: \nmax(|s''(x)|)", col = threshcols[1])
+mtext(side = 3, "Statistical \nthreshold: \nmax(|s''(x)|)", line = -3.75, adj = 0.05, cex = def_cex, col = threshcols[1])
+points(x = 0, y = pred_ex_mn[which(abs(xvals1-0)==min(abs(xvals1-0)))], pch = 16, cex = thresh_cex)
+polygon(x = c(xvals1, rev(xvals1)), y = c(pred_ex_mn-ci_width, rev(pred_ex_mn + ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+#abline(v = 0, lty = 2, lwd = thresh_lwd)
+#mtext(side = 2, "s(x)", line = 0)#, outer = TRUE
+mtext(side = 1, "x (driver)", line = 0.35)
+points(x = thresh_ex[1], y = pred_ex_mn[which(abs(xvals1-thresh_ex[1])==min(abs(xvals1-thresh_ex[1])))], col = threshcols[1], pch = 16, cex = thresh_cex)
+points(x = thresh_ex[1], y = pred_ex_mn[which(abs(xvals1-thresh_ex[1])==min(abs(xvals1-thresh_ex[1])))], pch = 1, cex = 1.1*thresh_cex)
+
+plot(x = xvals1, D2_ex_mn, las = 1, xaxt = "n", yaxt = "n", type = "l", xlim = c(min(xvals1), max(xvals1)), lwd = lwd_gam)
+#mtext(side = 3, "Statistical: min(s''(x))")
+polygon(x = c(xvals1, rev(xvals1)), y = c(D2_ex_mn-0.4*ci_width, rev(D2_ex_mn + 0.4*ci_width)), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
+abline(v = 0, lty = 2, lwd = thresh_lwd)
+abline(v = thresh_ex[1], col = threshcols[1], lwd = thresh_lwd)
+mtext(side = 2, "s '' (x)", line = 0)#, outer = TRUE
+abline(h = 0, lty = 1, col = "gray", lwd = 0.8)
+
+dev.off()
+
+```
+
 ### hs choice
 
 show that the max(|s''(x)|) definition is the best for different HS orientations: repeat of the hs panel of table 1 figure but for 3 additional HS orientations - decreasing then flat, flat then increasing, and flat then decreasing
@@ -665,6 +893,7 @@ j_df_ex2$best_mod <- ln_ex2$best_mod
 # save the jackknifing results
 j_df_ex_sig <- j_df_ex2
 
+
 ```
 
 
@@ -760,6 +989,9 @@ text(x = 0.1, y = -2, "true \nthreshold", cex = label_cex)
 #axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6)-3, labels = NA)
 #axis(side = 2, at = c(-3, -2, -1, 0, 1), las = 1)
 abline(v = dt_ex$thresh_loc_z[1], lty = 2)
+# add simulated data to this
+lines(x = zfun(dt_ex$driver), y = zfun(dt_ex$obs_response), type = "p", pch = 16, col = adjustcolor("black", alpha.f = 0.5))
+
 
 
 # second deriv 
@@ -966,6 +1198,7 @@ j_df_ex2$best_mod <- ln_ex2$best_mod
 j_df_ex_skew <- j_df_ex2
 
 
+
 ```
 
 
@@ -1026,6 +1259,8 @@ mtext(side = 3, "2) Fit full data", line = 0, adj = 0.5, cex = title_cex)
 mtext(side = 2, "s(x)", line = 0.2)
 text(x = 0.15, y = -2, "true \nthreshold", cex = label_cex)
 abline(v = dt_ex$thresh_loc_z[1], lty = 2)
+# add simulated data to this
+lines(x = zfun(dt_ex$driver), y = zfun(dt_ex$obs_response), type = "p", pch = 16, col = adjustcolor("black", alpha.f = 0.5))
 
 
 # first deriv 
@@ -1275,6 +1510,8 @@ mtext(side = 3, "2) Fit full data", line = 0, adj = 0.5, cex = title_cex)
 mtext(side = 2, "s(x)", line = 0.2)
 text(x = 0.2, y = -2, "true \nthreshold", cex = label_cex)
 abline(v = dt_ex$thresh_loc_z[1], lty = 2)
+# add simulated data to this
+lines(x = zfun(dt_ex$driver), y = zfun(dt_ex$obs_response), type = "p", pch = 16, col = adjustcolor("black", alpha.f = 0.5))
 
 
 # second deriv 
@@ -1528,12 +1765,15 @@ simx <- 1
 
 outputx <- "response"
 par(mar = mar2)
-plot(x = xvals1, y = full_dfs$mn[which(full_dfs$sim==simx & full_dfs$output==outputx)], type = "l", las = 1, col = "black", xlab = NA, ylab = NA, xaxt = "n", ylim = c(min(full_dfs$low[which(full_dfs$sim==simx & full_dfs$output==outputx)]), max(full_dfs$up[which(full_dfs$sim==simx &full_dfs$output==outputx)])), yaxt ="n")
+plot(x = xvals1, y = full_dfs$mn[which(full_dfs$sim==simx & full_dfs$output==outputx)], type = "l", las = 1, col = "black", xlab = NA, ylab = NA, xaxt = "n", ylim = c(min(full_dfs$low[which(full_dfs$sim==simx & full_dfs$output==outputx)]), 1.1*max(full_dfs$up[which(full_dfs$sim==simx &full_dfs$output==outputx)])), yaxt ="n")
 polygon(x = c(xvals1, rev(xvals1)), y = c(full_dfs$low[which(full_dfs$sim==simx & full_dfs$output==outputx)], rev(full_dfs$up[which(full_dfs$sim==simx & full_dfs$output==outputx)])), col = adjustcolor("gray50", alpha.f = 0.3), border = NA)
 mtext(side = 3, "2) Fit full data", line = 0, adj = 0.5, cex = title_cex)
 mtext(side = 2, "s(x)", line = 0.2)
 #axis(side = 1, at = c(0, 1, 2, 3, 4, 5, 6)-3, labels = NA)
 #axis(side = 2, at = c(-3, -2, -1, 0, 1), las = 1)
+# add simulated data to this
+lines(x = zfun(dt_ex$driver), y = zfun(dt_ex$obs_response), type = "p", pch = 16, col = adjustcolor("black", alpha.f = 0.5))
+
 
 # first deriv 
 outputx <- "d1"
