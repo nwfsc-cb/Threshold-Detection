@@ -552,7 +552,7 @@ boxpos <- c(1, 2, 3)#c(1:4, 7:10) # positions of the boxes
 
 labpos <- c(1, 2, 3) # position of box labels on x axis
 
-n_adj <- 0.75#0.5 # how far from top of box to adjust sample sizes
+n_adj <- 0.5#0.5 # how far from top of box to adjust sample sizes
 n_size <- 1 # font size of sample sizes
 
 max_adj <- 0 # adjust ymax 
@@ -2180,7 +2180,7 @@ levels[,2] <- rep(NA, 4)
 
 #levels
 
-n_adj <- 0.25 # how far from top of box to adjust sample sizes
+n_adj <- 0.5 # how far from top of box to adjust sample sizes
 n_size <- 1 # font size of sample sizes
 
 yaxt_at <- c(-2, -1, 0, 1, 2, 3)# where to put y axis labels
