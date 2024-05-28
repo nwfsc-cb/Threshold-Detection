@@ -12,6 +12,7 @@ should take around 3.5 hours to run with 100 replicates
 
 ```{r, include=FALSE}
 library("mgcv")
+library("MuMIn") # for AICc
 library("gratia")
 library("tidyverse")
 #library("quantmod") # for findPeaks function
@@ -173,6 +174,11 @@ tictoc::toc()
 
 #View(thresh_pj)
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/focal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 sk_jdf <- jdf
 sk_jdf$shape <- rep("skew", length(sk_jdf$sim)) # add shape of driver-response relationship
 sk_jdf$best_mod <- lndf$best_mod # column indicating which model was best (based on AIC)
@@ -257,6 +263,11 @@ for(p in 1:length(parmat[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/focal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 sg_jdf <- jdf
 sg_jdf$shape <- rep("sigmoidal", length(sg_jdf$sim))
@@ -344,6 +355,11 @@ for(p in 1:length(parmat[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/focal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 hs_jdf <- jdf
 hs_jdf$shape <- rep("hockeystick", length(hs_jdf$sim))
 hs_jdf$best_mod <- lndf$best_mod
@@ -430,6 +446,11 @@ for(p in 1:length(parmat[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/focal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 ln_jdf <- jdf
 ln_jdf$shape <- rep("linear", length(ln_jdf$sim))
@@ -571,6 +592,12 @@ for(p in 1:length(parmatc[,1])){
 
 tictoc::toc()
 
+#write.csv(lin_cov_df, "simulation outputs/lin_cov.csv")
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 #View(thresh_pj)
 
 sk_cov_jdf <- cov_jdf
@@ -655,6 +682,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 sg_cov_jdf <- cov_jdf
 sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
@@ -741,6 +773,11 @@ for(p in 1:length(parmatc[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 hs_cov_jdf <- cov_jdf
 hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
 hs_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -826,6 +863,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 ln_cov_jdf <- cov_jdf
 ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
@@ -942,6 +984,11 @@ tictoc::toc()
 
 #View(thresh_pj)
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 sk_cov_jdf <- cov_jdf
 sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
 sk_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -1025,6 +1072,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 sg_cov_jdf <- cov_jdf
 sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
@@ -1111,6 +1163,11 @@ for(p in 1:length(parmatc[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 hs_cov_jdf <- cov_jdf
 hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
 hs_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -1195,6 +1252,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 ln_cov_jdf <- cov_jdf
 ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
@@ -1313,6 +1375,11 @@ tictoc::toc()
 
 #View(thresh_pj)
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 sk_cov_jdf <- cov_jdf
 sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
 sk_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -1396,6 +1463,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 sg_cov_jdf <- cov_jdf
 sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
@@ -1483,6 +1555,11 @@ for(p in 1:length(parmatc[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 hs_cov_jdf <- cov_jdf
 hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
 hs_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -1569,6 +1646,11 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/lin_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
 
 ln_cov_jdf <- cov_jdf
 ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
@@ -1684,6 +1766,11 @@ tictoc::toc()
 
 #View(thresh_pj)
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 sk_cov_jdf <- cov_jdf
 sk_cov_jdf$shape <- rep("skew", length(sk_cov_jdf$sim))
 sk_cov_jdf$best_mod <- cov_lndf$best_mod
@@ -1767,6 +1854,12 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 
 sg_cov_jdf <- cov_jdf
 sg_cov_jdf$shape <- rep("sigmoidal", length(sg_cov_jdf$sim))
@@ -1854,6 +1947,12 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 
 hs_cov_jdf <- cov_jdf
 hs_cov_jdf$shape <- rep("hockeystick", length(hs_cov_jdf$sim))
@@ -1943,6 +2042,12 @@ for(p in 1:length(parmatc[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/exp_cov0.csv")
+
+#cov_jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 
 ln_cov_jdf <- cov_jdf
 ln_cov_jdf$shape <- rep("linear", length(ln_cov_jdf$sim))
@@ -2094,6 +2199,12 @@ for(p in 1:length(parmat2[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/nonfocal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "step") %>% select(-X, -shape, -best_mod, -aic_diff)
+
+
 st_jdf <- jdf
 st_jdf$shape <- rep("step", length(st_jdf$sim))
 st_jdf$best_mod <- lndf$best_mod
@@ -2181,6 +2292,11 @@ for(p in 1:length(parmat2[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/nonfocal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "skew") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 sk2_jdf <- jdf
 sk2_jdf$shape <- rep("skew", length(sk2_jdf$sim))
 sk2_jdf$best_mod <- lndf$best_mod
@@ -2267,6 +2383,12 @@ for(p in 1:length(parmat2[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/nonfocal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "sigmoidal") %>% select(-X, -shape, -best_mod, -aic_diff)
+
+
 sg2_jdf <- jdf
 sg2_jdf$shape <- rep("sigmoidal", length(sg2_jdf$sim))
 sg2_jdf$best_mod <- lndf$best_mod
@@ -2352,6 +2474,12 @@ for(p in 1:length(parmat2[,1])){
 
 tictoc::toc()
 
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/nonfocal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "hockeystick") %>% select(-X, -shape, -best_mod, -aic_diff)
+
+
 hs2_jdf <- jdf
 hs2_jdf$shape <- rep("hockeystick", length(hs2_jdf$sim))
 hs2_jdf$best_mod <- lndf$best_mod
@@ -2435,6 +2563,12 @@ for(p in 1:length(parmat2[,1])){
 
 
 tictoc::toc()
+
+# previously saved jdf
+#df_tmp <- read.csv("simulation outputs0/nonfocal_results.csv")
+
+#jdf <- df_tmp %>% filter(shape == "linear") %>% select(-X, -shape, -best_mod, -aic_diff)
+
 
 ln2_jdf <- jdf
 ln2_jdf$shape <- rep("linear", length(ln2_jdf$sim))
