@@ -984,8 +984,10 @@ points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set
 points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
 
 # legend background
-legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
-legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "Time series \nlength", bg = "white", ncol = 2, bty = "n")
+#legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
+#legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "Obs. \nerror", bg = "white", pch = 16, bty = "n")
 
 
 plot_df <- roc_df[which(roc_df$sig_criteria=="strict"),] 
@@ -1100,8 +1102,10 @@ points(x = dt_sub$FPR[which(as.character(dt_sub$obs_error)==as.character(obs_set
 # put circle around current conditions
 points(x = dt_sub$FPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], y = dt_sub$TPR[which(dt_sub$obs_error==0.14 & dt_sub$ts_length==13)], pch = 1, col = "black", cex = 2.4)
 # legend background
-legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
-legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "Time series \nlength", bg = "white", ncol = 2, bty = "n")
+#legend("bottomright", legend = as.character(ts_set_h), col = "gray30", pch = pt_pch, title = "ts length", bg = "white", ncol = 2, bty = "n")
+#legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "obs_sd", bg = "white", pch = 16, bty = "n")
+legend("bottom", legend = c("0.014", "0.14"), col = c("cadetblue", "blue"), title = "Obs. \nerror", bg = "white", pch = 16, bty = "n")
 
 
 plot_df <- roc_df[which(roc_df$sig_criteria=="strict"),] 
@@ -1233,7 +1237,8 @@ axis(side = 1, at = c(1.5, 5.5, 9.5, 13.5, 17.5, 21.5, 25.5, 29.5), labels = as.
 mtext(side = 1, "Time series length (years)", line = 1.2)#, cex = xlab_cex
 mtext(side = 3, "Strict detection requirements")
 abline(h = 0, lty = 2)
-legend("bottomright", legend = c("obs_sd = 0.014", "obs_sd = 0.14"), pch = c(16, 1), col = c("cadetblue", "blue"), ncol = 2)
+#legend("bottomright", legend = c("obs_sd = 0.014", "obs_sd = 0.14"), pch = c(16, 1), col = c("cadetblue", "blue"), ncol = 2)
+legend("bottomright", legend = c("0.014", "0.14"), pch = c(16, 1), col = c("cadetblue", "blue"), ncol = 2, title = "Obs. error")
 
 for(i in 1:nrow(levels)){
   yvals <- datasub$thresh_diff[which(datasub$obs_error==as.numeric(levels[i,1]) & datasub$ts_length==as.numeric(levels[i, 2]))] 
