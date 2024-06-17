@@ -6,7 +6,7 @@ output: html_document
 ---
 
 
-README: code for analyses of spatial hake-temperature relationships. Note this Rmd requires the hake acoustic survey data and temperature data from Malick et al. 2020 to run, but these are from Mike Malick and aren't uploaded to the github repo
+README: Code for analyses of spatial hake-temperature relationships. The first part of this Rmd requires the hake acoustic survey data and temperature data from Malick et al. 2020, which are not publicly available.
 
 
 ```{r}
@@ -487,15 +487,15 @@ lm_raw_5_20_fits <- stats::predict(lm_raw_5_20, newdata = data.frame(temp_100_an
 
 # get the threshold estimate on original scale
 #View(age5_20_thresh$jack_summ)
-thresh_est_5_20 <- invzfun(age5_20_thresh$jack_summ$thresh_mean[which(age5_20_thresh$jack_summ$thresh_method=="abs_max_d2" & age5_20_thresh$jack_summ$sig_type=="none")], hake_age5_20$temp_100_anom)
+thresh_est_5_20 <- invzfun(age5_20_thresh$jack_summ$thresh_mean[which(age5_20_thresh$jack_summ$thresh_method=="abs_max_d2" & age5_20_thresh$jack_summ$sig_type=="none")], hake_age5_20$temp_100_anom) # 0.2208785
 
 # estimate the true driver-response relationship, assuming it is nonlinear and a hockeystick shape
 # get the mean of the flat (pre-threshold) part of the GAM prediction
-hs_1 <- mean(gam_raw_5_20_fits[which(driver_hake<=thresh_est_5_20)])
+hs_1 <- mean(gam_raw_5_20_fits[which(driver_hake<=thresh_est_5_20)]) # 0.253041
 
 # get the equation of the line (y = mx + b) for the second part (past the threshold)
-hs_2m <- (gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_1)/(driver_hake[length(driver_hake)]-max(driver_hake[which(driver_hake<=thresh_est_5_20)])) # slope
-hs_2b <- gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_2m*driver_hake[length(driver_hake)] # int
+hs_2m <- (gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_1)/(driver_hake[length(driver_hake)]-max(driver_hake[which(driver_hake<=thresh_est_5_20)])) # slope: 0.6409229
+hs_2b <- gam_raw_5_20_fits[length(gam_raw_5_20_fits)]-hs_2m*driver_hake[length(driver_hake)] # intercept: 0.1165395
 
 # check this looks right
 plot(x = driver_hake, y = ifelse(driver_hake < thresh_est_5_20, hs_1, hs_2m*driver_hake + hs_2b), type = "l", ylim = c(0, 1))
@@ -508,8 +508,8 @@ lines(x = hake_age5_20$temp_100_anom, y = hake_age5_20$age5_20_CA_US, type = "p"
 
 # get the parameters for the equation of the line: just use the slope and intercept from the linear model
 #lm_raw_5_20 # intercept = 0.29, slope = 0.16
-ln_b_5_20 <- unname(lm_raw_5_20$coefficients[1])
-ln_m_5_20 <- unname(lm_raw_5_20$coefficients[2])
+ln_b_5_20 <- unname(lm_raw_5_20$coefficients[1])# 0.2874051
+ln_m_5_20 <- unname(lm_raw_5_20$coefficients[2])# 0.1636895
 
 # check this looks right
 plot(x = driver_hake, y = ln_m_5_20*driver_hake + ln_b_5_20, type = "l", ylim = c(0, 1))
@@ -525,8 +525,8 @@ obs_sd_5_20 <- 0.14 # choose 0.14
 #hist(hake_age5_20$temp_100_anom, n = 8)
 
 # assume driver has normal distribution
-x_sd1 <- sd(hake_age5_20$temp_100_anom)
-x_mean1 <- mean(hake_age5_20$temp_100_anom)
+x_sd1 <- sd(hake_age5_20$temp_100_anom) # 0.3221409
+x_mean1 <- mean(hake_age5_20$temp_100_anom) # 0
 
 # temporal autocorrelation
 #acf(hake_age5_20$temp_100_anom) # doesn't seem to be an issue
