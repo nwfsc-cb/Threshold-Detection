@@ -1,0 +1,172 @@
+---
+title: "data_prep"
+author: "Raine Detmer"
+date: "2024-07-08"
+output: html_document
+---
+
+README: Code for preparing the hake data sets used in the analyses of spatial hake-temperature relationships. For the full interpolated temperature data used here, please contact Michael Malick (michael.malick'at'noaa.gov). For contacts regarding the hake acoustic survey data, see:
+
+https://www.fisheries.noaa.gov/west-coast/sustainable-fisheries/fisheries-engineering-and-acoustic-technologies-team 
+
+```{r}
+library("mgcv")
+library("MuMIn") # for AICc
+library("gratia")
+library("tidyverse")
+library("pracma") # for findpeaks function
+#library("data.table") #for between() function
+
+library("tictoc") # for timing
+
+# look for thresholds
+source("load_functions.R") # loads all the functions in the "functions" folder
+
+options(dplyr.summarise.inform = FALSE)# get rid of the "summarize has grouped output by..." warnings
+
+```
+
+
+# data prep
+
+data are from Malick et al. 2020:
+
+Malick MJ, Hunsicker ME, Haltuch MA, Parker-Stetter SL, Berger AM, Marshall KN (2020) Relationships between temperature and Pacific hake distribution vary across latitude and life-history stage. Mar Ecol Prog Ser 639:185-197. https://doi.org/10.3354/meps13286 
+
+Biomass data from acoustic hake survey
+- The 'wgt_total' column gives total biomass for a location in kg
+- The age specific columns give the age-specific biomass for a location in kg
+
+Temperature data
+- the "raw" data (temperature_100m_data_2022_02_04.csv), contain the temperature at 100 meters directly from the measurement instrument (e.g., CTD)
+- The other file (temperature_100m_interp_2022_02_04.csv) has the spatially interpolated temperature at 100 m variable prepared by Michael Malick, which was used used in Malick et al. 2020's analyses
+
+
+read in the data: 
+
+```{r}
+
+hakebm <- read.csv("hake_data_raw/hake_biomass_2022_02_04.csv")
+
+haketmp <- read.csv("hake_data_raw/temperature_100m_data_2022_02_04.csv")
+
+haketmpint <- read.csv("hake_data_raw/temperature_100m_interp_2022_02_04.csv")
+
+
+# look at the data structure
+
+#head(hakebm)
+
+#str(hakebm)
+# columns are lon, lat, year, transect, present_total (total number?), wgt_total (total biomass), are columns for age 2 through age 20, also columns for groups age 3-4 and age 5-20 
+
+#str(haketmpint)
+
+
+```
+
+
+note on sampling variability:
+
+from Malick et al. (2020): "surveys moved northward along the west coast of North America until approximately Dixon Entrance (~54.5° N), or to the latitude at which hake were no longer detected. Survey transects extended from about 50 m bottom depth nearshore to 1500 m, or 64.8 km (35 nautical miles) offshore, whichever was further. If hake were observed at the offshore end of a transect, the transect was continued for 0.926 km (0.5 n miles) beyond the end of the hake aggregation."
+
+to deal with this, we decided to only use data from transects within the common spatial extent of the survey across all years
+
+```{r}
+
+#head(hakebm)
+hake1 <- hakebm[ , c(1:4, 5, 6, 16, 21, 42:46)] # don't need all 46 columns
+
+# add column indicating what country the survey location is in
+# Canadian boundary is the 49th parallel
+hake1$country <- ifelse(hake1$lat > 49, "CA", "US")
+
+# calculate common survey extent: for each year get the max and min latitude of the survey, then get the lowest max latitude and the highest min latitude across all years and use these as the boundaries of the common survey extent. Then filter all survey locations within this common region. Then for each year, get the total biomass of all hake, age2, ages 3-4, and ages 5-20 in each country
+hake1 <- hake1 %>% group_by(year) %>% mutate(N_max = max(lat), N_min = min(lat)) %>% ungroup() %>% mutate(up_ext = min(N_max), low_ext = max(N_min)) %>% filter(lat <= up_ext) %>% filter(lat >= low_ext) %>% group_by(year) %>% mutate(lat_mx = max(lat), lat_mn = min(lat)) %>% ungroup() %>% group_by(year, country, lat_mx, lat_mn) %>% summarise(wgt_total = sum(wgt_total), age2 = sum(age2), age3_4 = sum(age3_4), age5_20 = sum(age5_20), samp_pts = n(), trans = length(unique(transect))) %>% ungroup()
+
+
+#View(hake1) # the survey limits aren't all exactly the same because the transects weren't in the exact same locations each year? I.e., the highest lat in a given year is going to be the lat that was closest to the lowest max lat across all years without going above that max
+
+# check the common extent is correct
+#max(hake1$lat_mx)
+#min(hake1$lat_mn)
+#hakebm %>% group_by(year) %>% summarize(N_max = max(lat), N_min = min(lat)) %>% summarize(up_ext = min(N_max), low_ext = max(N_min))
+
+# subset out the hake data from the US
+hake_US <- hake1 %>% filter(country=="US") %>% dplyr::select(-country)
+colnames(hake_US) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("US", 6), sep = "_"))
+
+#View(hake_US)
+
+# subset out the hake data from CA
+hake_CA <- hake1 %>% filter(country=="CA") %>% select(-country)
+colnames(hake_CA) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("CA", 6), sep = "_"))
+
+# join these together
+hake2 <- left_join(hake_US, hake_CA, by = c("year", "lat_mx", "lat_mn")) 
+
+#View(hake2)
+
+# add columns w/ proportions of biomass in CA
+hake3 <- hake2 %>% mutate(wgt_total_CA_US = wgt_total_CA/(wgt_total_CA + wgt_total_US), age2_CA_US = age2_CA/(age2_CA + age2_US), age3_4_CA_US = age3_4_CA/(age3_4_CA + age3_4_US), age5_20_CA_US = age5_20_CA/(age5_20_CA + age5_20_US)) #, samp_CA_US = samp_eff_CA/(samp_eff_CA + samp_eff_US), trans_CA_US = trans_CA/(trans_CA + trans_US)
+
+#View(hake3)
+
+```
+
+
+For the temperature data, we used the interpolated temperatures at 100m from Malick et al. 2020, who
+"... used the 50 km interpolated surfaces of temperature at 100 m to calculate grid-cell specific temperature anomalies; we first calculated the average temperature for each grid cell across all survey years and then subtracted the average temperature value from the grid-cell-specific annual temperature values. We used these temperature anomalies at 100 m as our primary temperature variable throughout the analysis."
+
+
+```{r}
+
+#View(haketmpint)
+
+# filter out the interpolated temperatures between 45 and 49ºN (region over which Malick et al. 2020 found a negative relationship between temperature and adult hake biomass), then get the average temperature and temperature anomaly in this region each year
+tmpint1 <- haketmpint %>% filter(lat >=45) %>% filter(lat <=49) %>% group_by(year) %>% summarize(temp_100 = mean(temp_100), temp_100_anom = mean(temp_100_anom))
+
+#View(tmpint1)
+
+# join this with the hake data for each year
+hake4 <- left_join(hake3, tmpint1, by = "year")
+
+
+#View(hake4)
+
+```
+
+
+
+```{r}
+
+# get the data subsets
+hake_tot <- hake4 %>% select(year, temp_100_anom, wgt_total_CA_US) %>% filter(is.na(temp_100_anom*wgt_total_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), wgt_total_CA_US_z = zfun(wgt_total_CA_US))
+
+#mean(hake_tot$wgt_total_CA_US) # 0.16
+
+hake_age5_20 <- hake4 %>% select(year, temp_100_anom, age5_20_CA_US) %>% filter(is.na(temp_100_anom*age5_20_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age5_20_CA_US_z = zfun(age5_20_CA_US))
+
+#View(hake_age5_20)
+#mean(hake_age5_20$age5_20_CA_US) # 0.29
+
+hake_age3_4 <- hake4 %>% select(year, temp_100_anom, age3_4_CA_US) %>% filter(is.na(temp_100_anom*age3_4_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age3_4_CA_US_z = zfun(age3_4_CA_US))
+
+#mean(hake_age3_4$age3_4_CA_US) # 0.10
+
+hake_age2 <- hake4 %>% select(year, temp_100_anom, age2_CA_US) %>% filter(is.na(temp_100_anom*age2_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age2_CA_US_z = zfun(age2_CA_US))
+
+#mean(hake_age2$age2_CA_US)# 0.01
+
+```
+
+
+```{r}
+# save the hake data
+write.csv(hake_tot, "hake data/hake_tot.csv")
+write.csv(hake_age5_20, "hake data/hake_age5_20.csv")
+write.csv(hake_age3_4, "hake data/hake_age3_4.csv")
+write.csv(hake_age2, "hake data/hake_age2.csv")
+
+```
+
