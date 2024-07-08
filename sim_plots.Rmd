@@ -2815,7 +2815,7 @@ yaxt_at <- round(seq(from = ymin, to = ymax, by = 1), 0)# where to put y axis la
 ylabs <- seq(from = ymin, to = ymax, by = 1)
 
 
-pdf("figurepdfs/Cov_bxpt_linexp.pdf", width = 5, height = 6)
+pdf("figurepdfs/Cov_bxpt_linexp_test.pdf", width = 5, height = 6)
 par(mfrow = c(4, 2))
 layout(matrix(c(1, 3, 5, 7, 2, 4, 6, 7), nrow = 4, ncol = 2), widths = c(1, 1), heights = c(1, 1, 1, 0.3))
 #layout.show(10)
@@ -2846,7 +2846,7 @@ abline(h = 0, lty = 2)
 text(x = 3, y = 2, "risk-averse \nside")
 text(x = 3, y = -1, "risk-prone \nside")
 #legend(x = "bottomright", legend = c("s(x)", "s(x) + s(x1)"), col = "gray30", pch = c(1, 16), title = "Model")#, bty = "n"
-legend(x = "bottomright", legend = c("x", "x + x1"), col = "gray30", pch = c(1, 16), title = "Variables in model", ncol = 2)
+legend(x = "bottomright", legend = c("x", expression(x~+~x[2])), col = "gray30", pch = c(1, 16), title = "Variables in model", ncol = 2)
 
 for(i in 1:nrow(levels)){
   #prop <- length(datasub$sim[which(datasub$cov_inc==levels[i,1])]/nrow(datasub))
