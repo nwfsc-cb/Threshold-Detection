@@ -3,9 +3,9 @@ Repo for simulation studies to explore detectability of ecological thresholds
 
 Details on repo files:
 
-run_simulations.Rmd = code for running all of the generic simulation studies (everything except the empirical hake case study)
+run_simulations.Rmd = code for running all of the theoretical simulation studies (everything except the empirical hake case study)
 
-sim_plots.Rmd = code for plotting the results of the generic simulation studies
+sim_plots.Rmd = code for plotting the results of the theoretical simulation studies
 
 conceptual_plots.Rmd = code for mkaing the conceptual figures (threshold definitions figure, simulation steps figures)
 
