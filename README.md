@@ -15,6 +15,8 @@ hake_example.Rmd = code for the empirical case study on Pacific hake (analyzing 
 
 simulation ouputs folder = outputs from the simulations run in run_simulations.Rmd (simulations using focal and nonfocal driver-response relationships, simulations with a linear and exponential covariate that is vs isn't included in the estimation models) and hake_example.Rmd
 
+hake data folder = empirical hake and temperature data used in "hake_example.Rmd"
+
 functions folder: all of the functions used in the simulation analyses
 - sim_data.R = function for simulating data with a specified underlying driver-response relationship
 - sim_emp_data.R = same as sim_data.R but with more options for the driver-response relationship (to better match potential empirical relationships)
