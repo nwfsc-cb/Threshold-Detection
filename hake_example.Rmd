@@ -6,7 +6,7 @@ output: html_document
 ---
 
 
-README: Code for analyses of spatial hake-temperature relationships. The first part of this Rmd requires the hake acoustic survey data and temperature data from Malick et al. 2020, which are not publicly available.
+README: Code for analyses of spatial hake-temperature relationships and simulations based on these empirical data. 
 
 
 ```{r}
@@ -28,144 +28,36 @@ options(dplyr.summarise.inform = FALSE)# get rid of the "summarize has grouped o
 ```
 
 
+# read in the data
 
-# data prep
-
-data are from Malick et al. 2020:
-
-Malick MJ, Hunsicker ME, Haltuch MA, Parker-Stetter SL, Berger AM, Marshall KN (2020) Relationships between temperature and Pacific hake distribution vary across latitude and life-history stage. Mar Ecol Prog Ser 639:185-197. https://doi.org/10.3354/meps13286 
-
-Biomass data from acoustic hake survey
-- The 'wgt_total' column gives total biomass for a location in kg
-- The age specific columns give the age-specific biomass for a location in kg
-
-Temperature data
-- the "raw" data (temperature_100m_data_2022_02_04.csv), contain the temperature at 100 meters directly from the measurement instrument (e.g., CTD)
-- The other file (temperature_100m_interp_2022_02_04.csv) has the spatially interpolated temperature at 100 m variable prepared by Michael Malick, which was used used in Malick et al. 2020's analyses
-
-
-read in the data: 
 
 ```{r}
 
-hakebm <- read.csv("hake_data/hake_biomass_2022_02_04.csv")
+hake_tot <- read.csv("hake data/hake_tot.csv") %>% select(-X) # prop. total hake biomass in Canada, remove index column
+hake_age5_20 <- read.csv("hake data/hake_age5_20.csv")%>% select(-X) # prop. age 5-10 hake biomass in Canada
+hake_age3_4 <- read.csv("hake data/hake_age3_4.csv")%>% select(-X) # prop. age 3-4 hake biomass in Canada 
+hake_age2 <- read.csv("hake data/hake_age2.csv")%>% select(-X) # prop. age 2 hake biomass in Canada
 
-haketmp <- read.csv("hake_data/temperature_100m_data_2022_02_04.csv")
+# year = year of survey
+# temp_100_anom = spatially interpolated temperature at 100 m, averaged across all transects between 45 and 49ºN
+# xx_CA_US = prop. of xx hake in Canada
+# temp_100_anom_z = standardized (mean of zero and sd of one) temp_100_anom
+# xx_CA_US_z  = standardized xx_CA_US
 
-haketmpint <- read.csv("hake_data/temperature_100m_interp_2022_02_04.csv")
+# join altogether
+#View(hake_tot)
 
+hake_all <- left_join(hake_tot, hake_age5_20, by = c("year", "temp_100_anom", "temp_100_anom_z")) %>% left_join(hake_age3_4, by = c("year", "temp_100_anom", "temp_100_anom_z")) %>% left_join(hake_age2, by = c("year", "temp_100_anom", "temp_100_anom_z"))
 
-# look at the data structure
-
-#head(hakebm)
-
-#str(hakebm)
-# columns are lon, lat, year, transect, present_total (total number?), wgt_total (total biomass), are columns for age 2 through age 20, also columns for groups age 3-4 and age 5-20 
-
-#str(haketmpint)
 
 
 ```
 
 
-note on sampling variability:
-
-from Malick et al. (2020): "surveys moved northward along the west coast of North America until approximately Dixon Entrance (~54.5° N), or to the latitude at which hake were no longer detected. Survey transects extended from about 50 m bottom depth nearshore to 1500 m, or 64.8 km (35 nautical miles) offshore, whichever was further. If hake were observed at the offshore end of a transect, the transect was continued for 0.926 km (0.5 n miles) beyond the end of the hake aggregation."
-
-to deal with this, we decided to only use data from transects within the common spatial extent of the survey across all years
-
-```{r}
-
-#head(hakebm)
-hake1 <- hakebm[ , c(1:4, 5, 6, 16, 21, 42:46)] # don't need all 46 columns
-
-# add column indicating what country the survey location is in
-# Canadian boundary is the 49th parallel
-hake1$country <- ifelse(hake1$lat > 49, "CA", "US")
-
-# calculate common survey extent: for each year get the max and min latitude of the survey, then get the lowest max latitude and the highest min latitude across all years and use these as the boundaries of the common survey extent. Then filter all survey locations within this common region. Then for each year, get the total biomass of all hake, age2, ages 3-4, and ages 5-20 in each country
-hake1 <- hake1 %>% group_by(year) %>% mutate(N_max = max(lat), N_min = min(lat)) %>% ungroup() %>% mutate(up_ext = min(N_max), low_ext = max(N_min)) %>% filter(lat <= up_ext) %>% filter(lat >= low_ext) %>% group_by(year) %>% mutate(lat_mx = max(lat), lat_mn = min(lat)) %>% ungroup() %>% group_by(year, country, lat_mx, lat_mn) %>% summarise(wgt_total = sum(wgt_total), age2 = sum(age2), age3_4 = sum(age3_4), age5_20 = sum(age5_20), samp_pts = n(), trans = length(unique(transect))) %>% ungroup()
-
-
-#View(hake1) # the survey limits aren't all exactly the same because the transects weren't in the exact same locations each year? I.e., the highest lat in a given year is going to be the lat that was closest to the lowest max lat across all years without going above that max
-
-# check the common extent is correct
-#max(hake1$lat_mx)
-#min(hake1$lat_mn)
-#hakebm %>% group_by(year) %>% summarize(N_max = max(lat), N_min = min(lat)) %>% summarize(up_ext = min(N_max), low_ext = max(N_min))
-
-# subset out the hake data from the US
-hake_US <- hake1 %>% filter(country=="US") %>% dplyr::select(-country)
-colnames(hake_US) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("US", 6), sep = "_"))
-
-#View(hake_US)
-
-# subset out the hake data from CA
-hake_CA <- hake1 %>% filter(country=="CA") %>% select(-country)
-colnames(hake_CA) <- c("year", "lat_mx", "lat_mn", paste(colnames(hake1[, 5:10]), rep("CA", 6), sep = "_"))
-
-# join these together
-hake2 <- left_join(hake_US, hake_CA, by = c("year", "lat_mx", "lat_mn")) 
-
-#View(hake2)
-
-# add columns w/ proportions of biomass in CA
-hake3 <- hake2 %>% mutate(wgt_total_CA_US = wgt_total_CA/(wgt_total_CA + wgt_total_US), age2_CA_US = age2_CA/(age2_CA + age2_US), age3_4_CA_US = age3_4_CA/(age3_4_CA + age3_4_US), age5_20_CA_US = age5_20_CA/(age5_20_CA + age5_20_US)) #, samp_CA_US = samp_eff_CA/(samp_eff_CA + samp_eff_US), trans_CA_US = trans_CA/(trans_CA + trans_US)
-
-#View(hake3)
-
-```
-
-
-For the temperature data, we used the interpolated temperatures at 100m from Malick et al. 2020, who
-"... used the 50 km interpolated surfaces of temperature at 100 m to calculate grid-cell specific temperature anomalies; we first calculated the average temperature for each grid cell across all survey years and then subtracted the average temperature value from the grid-cell-specific annual temperature values. We used these temperature anomalies at 100 m as our primary temperature variable throughout the analysis."
-
-
-```{r}
-
-#View(haketmpint)
-
-# filter out the interpolated temperatures between 45 and 49ºN (region over which Malick et al. 2020 found a negative relationship between temperature and adult hake biomass), then get the average temperature and temperature anomaly in this region each year
-tmpint1 <- haketmpint %>% filter(lat >=45) %>% filter(lat <=49) %>% group_by(year) %>% summarize(temp_100 = mean(temp_100), temp_100_anom = mean(temp_100_anom))
-
-#View(tmpint1)
-
-# join this with the hake data for each year
-hake4 <- left_join(hake3, tmpint1, by = "year")
-
-
-#View(hake4)
-
-```
-
-
-
-```{r}
-
-# get the data subsets
-hake_tot <- hake4 %>% select(year, temp_100_anom, wgt_total_CA_US) %>% filter(is.na(temp_100_anom*wgt_total_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), wgt_total_CA_US_z = zfun(wgt_total_CA_US))
-
-#mean(hake_tot$wgt_total_CA_US) # 0.16
-
-hake_age5_20 <- hake4 %>% select(year, temp_100_anom, age5_20_CA_US) %>% filter(is.na(temp_100_anom*age5_20_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age5_20_CA_US_z = zfun(age5_20_CA_US))
-
-#View(hake_age5_20)
-#mean(hake_age5_20$age5_20_CA_US) # 0.29
-
-hake_age3_4 <- hake4 %>% select(year, temp_100_anom, age3_4_CA_US) %>% filter(is.na(temp_100_anom*age3_4_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age3_4_CA_US_z = zfun(age3_4_CA_US))
-
-#mean(hake_age3_4$age3_4_CA_US) # 0.10
-
-hake_age2 <- hake4 %>% select(year, temp_100_anom, age2_CA_US) %>% filter(is.na(temp_100_anom*age2_CA_US)==F) %>% mutate(temp_100_anom_z = zfun(temp_100_anom), age2_CA_US_z = zfun(age2_CA_US))
-
-#mean(hake_age2$age2_CA_US)# 0.01
-
-
-```
 
 # threshold detection steps
 
-note the functions used for these steps are in emp_functions.R
+the functions used for these steps are in emp_functions.R
 
 ## linearity check
 
@@ -235,20 +127,20 @@ get GAM and LM fits on the raw (not standardized scale) for plotting
 ```{r}
 
 # driver values
-hake_x <- seq(from = min(hake4$temp_100_anom, na.rm = T), to = max(hake4$temp_100_anom, na.rm = T), length.out = 100) # by 0.01
+hake_x <- seq(from = min(hake_all$temp_100_anom, na.rm = T), to = max(hake_all$temp_100_anom, na.rm = T), length.out = 100) # by 0.01
 
 # gams fit on raw scale
-tot_hake.gm <- gam(wgt_total_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+tot_hake.gm <- gam(wgt_total_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake_all)
 
-age5_20_hake.gm <- gam(age5_20_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+age5_20_hake.gm <- gam(age5_20_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake_all)
 
 # age 3-4 hake
-#age3_4_hake.lm <- lm(age3_4_CA_US ~ temp_100_anom, data = hake4)
-age3_4_hake.gm <- gam(age3_4_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+#age3_4_hake.lm <- lm(age3_4_CA_US ~ temp_100_anom, data = hake_all)
+age3_4_hake.gm <- gam(age3_4_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake_all)
 
 # age 2 hake
-#age2_hake.lm <- lm(age2_CA_US ~ temp_100_anom, data = hake4)
-age2_hake.gm <- gam(age2_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake4)
+#age2_hake.lm <- lm(age2_CA_US ~ temp_100_anom, data = hake_all)
+age2_hake.gm <- gam(age2_CA_US~s(temp_100_anom,k=4,bs="tp"),data = hake_all)
 
 gam_list <- list(tot = tot_hake.gm, age5_20 = age5_20_hake.gm, age3_4 = age3_4_hake.gm, age2 = age2_hake.gm)
 
@@ -277,7 +169,7 @@ for(i in 1:length(sub_names)){
 
 
 # get the linear model for the age 5-20 group
-age5_20_hake.lm <- gam(age5_20_CA_US~temp_100_anom,data = hake4)
+age5_20_hake.lm <- gam(age5_20_CA_US~temp_100_anom,data = hake_all)
 
 lm_pred <- stats::predict(age5_20_hake.lm, newdata = data.frame(temp_100_anom = hake_x), se.fit = TRUE)
   
@@ -389,9 +281,10 @@ plot the GAM fits for all age groups
 # get thresholds on raw scale (need the mean and sd of the drivers and responses for the invzfun)
 
 ymin <- 0
-ymax <- max(hake4$wgt_total_CA_US) + 0.25
+ymax <- max(hake_all$wgt_total_CA_US) + 0.25
 
-lab_adj <- 0.04 # how high above points to put year label
+#lab_adj <- 0.04 # how high above points to put year label
+lab_adj <- 0.022 # how high above points to put year label
 
 # xvalues used for calculating thresholds on standardized scale
 rangei <- max(hake_x, na.rm = T) - min(hake_x, na.rm = T)
@@ -399,7 +292,8 @@ hake_xs <- seq(from = min(hake_x, na.rm = T), to = max(hake_x, na.rm = T), lengt
 
 
 # plot results
-pdf("figurepdfs/hake_fits_all_test.pdf")
+#pdf("figurepdfs/hake_fits_all_test.pdf")
+pdf("figurepdfs/hake_fits_all_years_labeled.pdf")
 par(mfrow = c(2, 2))
 par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
 # total
@@ -411,8 +305,12 @@ lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 mtext(side = 3, "Total hake biomass", line = -1.5)
 # add the extreme points
-for(i in 1:3){
-text(x = hake_tot$temp_100_anom[which(hake_tot$temp_100_anom>0.25)][i], y = hake_tot$wgt_total_CA_US[which(hake_tot$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_tot$year[which(hake_tot$temp_100_anom>0.25)][i]), cex =0.8)
+# for(i in 1:3){
+# text(x = hake_tot$temp_100_anom[which(hake_tot$temp_100_anom>0.25)][i], y = hake_tot$wgt_total_CA_US[which(hake_tot$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_tot$year[which(hake_tot$temp_100_anom>0.25)][i]), cex =0.8)
+# }
+# add all points
+for(i in 1:length(hake_tot$temp_100_anom)){
+text(x = hake_tot$temp_100_anom[i], y = hake_tot$wgt_total_CA_US[i] + lab_adj, as.character(hake_tot$year[i]), cex =0.8)
 }
 
 # 5-20
@@ -427,8 +325,12 @@ lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 mtext(side = 3, "Ages 5-20", line = -1.5)
 # add the extreme points
-for(i in 1:3){
-text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i], y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.8)
+# for(i in 1:3){
+# text(x = hake_age5_20$temp_100_anom[which(hake_age5_20$temp_100_anom>0.25)][i], y = hake_age5_20$age5_20_CA_US[which(hake_age5_20$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age5_20$year[which(hake_age5_20$temp_100_anom>0.25)][i]), cex =0.8)
+# }
+# add all points
+for(i in 1:length(hake_age5_20$temp_100_anom)){
+text(x = hake_age5_20$temp_100_anom[i], y = hake_age5_20$age5_20_CA_US[i] + 1.25*lab_adj, as.character(hake_age5_20$year[i]), cex =0.8)
 }
 
 # age 3-4
@@ -441,9 +343,15 @@ mtext(side = 1, "Mean 100m temperature anomaly between 45-49ºN", line = 1.5, ou
 lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 
-for(i in 1:3){
-text(x = hake_age3_4$temp_100_anom[which(hake_age3_4$temp_100_anom>0.25)][i], y = hake_age3_4$age3_4_CA_US[which(hake_age3_4$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age3_4$year[which(hake_age3_4$temp_100_anom>0.25)][i]), cex =0.8)
+# for(i in 1:3){
+# text(x = hake_age3_4$temp_100_anom[which(hake_age3_4$temp_100_anom>0.25)][i], y = hake_age3_4$age3_4_CA_US[which(hake_age3_4$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age3_4$year[which(hake_age3_4$temp_100_anom>0.25)][i]), cex =0.8)
+# }
+
+# add all points
+for(i in 1:length(hake_age3_4$temp_100_anom)){
+text(x = hake_age3_4$temp_100_anom[i], y = hake_age3_4$age3_4_CA_US[i] + lab_adj, as.character(hake_age3_4$year[i]), cex =0.8)
 }
+
 
 # age 2
 dt_sub <- pred_df[which(pred_df$hake_sub=="age2"),]
@@ -455,8 +363,49 @@ mtext(side = 3, "Age 2", line = -1.5)
 lines(x =hake_x, y = dt_sub$mn, lty = 2)
 polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
 
-for(i in 1:3){
-text(x = hake_age2$temp_100_anom[which(hake_age2$temp_100_anom>0.25)][i], y = hake_age2$age2_CA_US[which(hake_age2$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age2$year[which(hake_age2$temp_100_anom>0.25)][i]), cex =0.8)
+# for(i in 1:3){
+# text(x = hake_age2$temp_100_anom[which(hake_age2$temp_100_anom>0.25)][i], y = hake_age2$age2_CA_US[which(hake_age2$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age2$year[which(hake_age2$temp_100_anom>0.25)][i]), cex =0.8)
+# }
+
+# add all points
+for(i in 1:length(hake_age2$temp_100_anom)){
+text(x = hake_age2$temp_100_anom[i], y = hake_age2$age2_CA_US[i] + 1.8*lab_adj, as.character(hake_age2$year[i]), cex =0.8)
+}
+
+dev.off()
+
+```
+
+
+```{r}
+# plot age 2 separately
+
+dt_sub <- pred_df[which(pred_df$hake_sub=="age2"),]
+
+pdf("figurepdfs/hake_fits_age2_years_labeled.pdf")
+#par(mfrow = c(2, 2))
+#par(mar=c(0.5, 1, 1, 0), oma = c(3, 2.5, 1, 0.5))
+plot(x = hake_age2$temp_100_anom, y = hake_age2$age2_CA_US, xlab = NA, ylab = NA, pch = 16, col = adjustcolor("black", alpha.f = 0.75), las = 1, ylim = c(0, 0.1))
+axis(side = 2, at = seq(0, 0.6, by = 0.2), labels = NA)
+mtext(side = 3, "Age 2", line = -1.5)
+mtext(side = 1, "Mean 100m temp anomaly between 45-49ºN", line = 0.5, outer = T)
+mtext(side = 2, "Proportion biomass in Canada", line = 1.25, outer = T)
+lines(x =hake_x, y = dt_sub$mn, lty = 2)
+polygon(x = c(hake_x, rev(hake_x)), y = c(dt_sub$up, rev(dt_sub$down)), col = adjustcolor("gray20", alpha.f = 0.2), border = NA)
+
+# for(i in 1:3){
+# text(x = hake_age2$temp_100_anom[which(hake_age2$temp_100_anom>0.25)][i], y = hake_age2$age2_CA_US[which(hake_age2$temp_100_anom>0.25)][i] + lab_adj, as.character(hake_age2$year[which(hake_age2$temp_100_anom>0.25)][i]), cex =0.8)
+# }
+
+# add all points
+for(i in 1:length(hake_age2$temp_100_anom)){
+  
+if(hake_age2$year[i] %in% c(1995, 1998, 2003, 2005, 2007, 2009, 2011, 2012, 2015, 2017, 2019)){
+  text(x = hake_age2$temp_100_anom[i], y = hake_age2$age2_CA_US[i] + 0.004, as.character(hake_age2$year[i]), cex =0.8)
+} else{
+  text(x = hake_age2$temp_100_anom[i], y = hake_age2$age2_CA_US[i] + 0.002, as.character(hake_age2$year[i]), cex =0.8)
+}
+
 }
 
 dev.off()
