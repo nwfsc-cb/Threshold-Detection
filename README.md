@@ -11,7 +11,7 @@ conceptual_plots.Rmd = code for mkaing the conceptual figures (threshold definit
 
 cciea_data.Rmd = code for downloading the CCIEA indicator data and analyzing it to inform choice of time series lenghts and observation errors in the generic simulations
 
-hake_example.Rmd = code for the empirical case study on Pacific hake (analyzing the data from Malick et al. 2020, simulating datasets similar to the observed data)
+hake_example.Rmd = code for the empirical case study on Pacific hake (analyzing relationships between ocean temperature and the proportion of hake in Canada, simulating datasets similar to the observed data)
 
 simulation ouputs folder = outputs from the simulations run in run_simulations.Rmd (simulations using focal and nonfocal driver-response relationships, simulations with a linear and exponential covariate that is vs isn't included in the estimation models) and hake_example.Rmd
 
