@@ -1,5 +1,8 @@
 # Threshold-Detection
-Repo for simulation studies to explore detectability of ecological thresholds
+Repository with code and data used in "Evaluating the robustness of generalized additive models as a tool for threshold detection in variable environments" by Detmer et al.
+
+DOI  Badge for this repository: 
+DOI: 10.5281/zenodo.14210416 
 
 Details on repo files:
 
